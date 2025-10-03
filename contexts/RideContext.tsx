@@ -1,0 +1,133 @@
+import React, { createContext, useState, useContext, ReactNode, useCallback } from 'react';
+import { Ride, RideStatus, PricingSettings, RouteInfo, Driver, VehicleType, VehiclePricing } from '../types';
+import { useAuth } from './AuthContext';
+
+interface RideContextType {
+  ride: Ride | null;
+  driverLiveLocation: { lat: number; lng: number; } | null;
+  pricing: PricingSettings;
+  requestRide: (start: any, end: any, vehicleType: VehicleType, routeInfo: RouteInfo, schedule?: { isScheduled: boolean, time: string }) => void;
+  acceptRide: (driver: Driver) => void;
+  cancelRide: () => void;
+  completeRide: () => void;
+  updatePricing: (newPricing: PricingSettings) => void;
+  getEstimatedFare: (vehicleType: VehicleType, distance: number, duration: number) => number;
+  updateRideStatus: (newStatus: RideStatus) => void;
+  updateDriverLocation: (location: { lat: number; lng: number; }) => void;
+}
+
+const RideContext = createContext<RideContextType | undefined>(undefined);
+
+const initialPricing: PricingSettings = {
+    [VehicleType.NORMAL_CAR]: { baseFare: 3000, perKm: 500, perMinute: 100 },
+    [VehicleType.AC_CAR]: { baseFare: 4000, perKm: 600, perMinute: 125 },
+    [VehicleType.PUBLIC_CAR]: { baseFare: 2500, perKm: 450, perMinute: 90 },
+    [VehicleType.VIP]: { baseFare: 10000, perKm: 1200, perMinute: 300 },
+    [VehicleType.MICROBUS]: { baseFare: 6000, perKm: 700, perMinute: 150 },
+    [VehicleType.MOTORCYCLE]: { baseFare: 1500, perKm: 300, perMinute: 75 },
+};
+
+export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [ride, setRide] = useState<Ride | null>(null);
+  const [driverLiveLocation, setDriverLiveLocation] = useState<{ lat: number; lng: number; } | null>(null);
+  const [pricing, setPricing] = useState<PricingSettings>(initialPricing);
+  const { user } = useAuth();
+
+  const getEstimatedFare = useCallback((vehicleType: VehicleType, distance: number, duration: number) => {
+    const vehiclePricing = pricing[vehicleType];
+    if (!vehiclePricing) return 0;
+
+    const fare = vehiclePricing.baseFare + (distance * vehiclePricing.perKm) + (duration * vehiclePricing.perMinute);
+    return Math.round(fare);
+  }, [pricing]);
+
+
+  const requestRide = useCallback((
+        start: { lat: number; lng: number; name: string }, 
+        end: { lat: number; lng: number; name: string },
+        vehicleType: VehicleType,
+        routeInfo: RouteInfo,
+        schedule?: { isScheduled: boolean, time: string }
+    ) => {
+    if (!user) return;
+    
+    const estimatedFare = getEstimatedFare(vehicleType, routeInfo.distance, routeInfo.duration);
+
+    const newRide: Ride = {
+      id: `ride_${Date.now()}`,
+      customerId: user.id,
+      startLocation: start,
+      endLocation: end,
+      status: RideStatus.REQUESTED,
+      vehicleType: vehicleType,
+      estimatedFare: estimatedFare,
+      distance: routeInfo.distance,
+      duration: routeInfo.duration,
+      polyline: routeInfo.polyline,
+      createdAt: new Date().toISOString(),
+      isScheduled: schedule?.isScheduled || false,
+      scheduledTime: schedule?.time
+    };
+    setRide(newRide);
+  }, [user, getEstimatedFare]);
+
+  const acceptRide = (driver: Driver) => {
+    if (ride && ride.status === RideStatus.REQUESTED) {
+      setRide({ ...ride, status: RideStatus.ACCEPTED, driverId: driver.id });
+    }
+  };
+  
+  const updateDriverLocation = useCallback((location: { lat: number; lng: number }) => {
+    setDriverLiveLocation(location);
+  }, []);
+
+  const updateRideStatus = (newStatus: RideStatus) => {
+    setRide(prev => {
+        if (!prev) return null;
+        if (prev.status === RideStatus.CANCELLED || prev.status === RideStatus.COMPLETED) {
+            return prev;
+        }
+        return { ...prev, status: newStatus };
+    });
+  };
+
+  const cancelRide = () => {
+    if(ride) {
+        setRide({ ...ride, status: RideStatus.CANCELLED });
+        setDriverLiveLocation(null);
+        setTimeout(() => setRide(null), 3000);
+    }
+  };
+
+  const completeRide = () => {
+    if (ride) {
+      const finalFare = getEstimatedFare(ride.vehicleType, ride.distance, ride.duration + Math.random() * 5); // Add random traffic delay
+      setRide({ 
+          ...ride, 
+          status: RideStatus.COMPLETED, 
+          finalFare, 
+          completedAt: new Date().toISOString() 
+      });
+      setDriverLiveLocation(null);
+      setTimeout(() => setRide(null), 5000);
+    }
+  };
+
+  const updatePricing = (newPricing: PricingSettings) => {
+      setPricing(newPricing);
+  };
+
+  return (
+    <RideContext.Provider value={{ ride, driverLiveLocation, pricing, requestRide, acceptRide, cancelRide, completeRide, updatePricing, getEstimatedFare, updateRideStatus, updateDriverLocation }}>
+      {children}
+    </RideContext.Provider>
+  );
+};
+
+export const useRide = () => {
+  const context = useContext(RideContext);
+  if (context === undefined) {
+    throw new Error('useRide must be used within a RideProvider');
+  }
+  return context;
+};

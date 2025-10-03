@@ -1,0 +1,7 @@
+{
+  "name": "Allo Taxi - ألو تكسي",
+  "description": "A professional ride-hailing application supporting Arabic, featuring a unified login, dynamic pricing per vehicle type, and advanced interactive maps via OpenStreetMap for customers, drivers, and administrators.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
