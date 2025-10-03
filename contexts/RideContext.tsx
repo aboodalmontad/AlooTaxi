@@ -1,10 +1,17 @@
-import React, { createContext, useState, useContext, ReactNode, useCallback } from 'react';
+import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect, useRef } from 'react';
 import { Ride, RideStatus, PricingSettings, RouteInfo, Driver, VehicleType, VehiclePricing } from '../types';
 import { useAuth } from './AuthContext';
+
+interface LiveTripData {
+  distanceTraveled: number; // in km
+  timeElapsed: number; // in seconds
+  currentFare: number;
+}
 
 interface RideContextType {
   ride: Ride | null;
   driverLiveLocation: { lat: number; lng: number; } | null;
+  liveTripData: LiveTripData | null;
   pricing: PricingSettings;
   requestRide: (start: any, end: any, vehicleType: VehicleType, routeInfo: RouteInfo, schedule?: { isScheduled: boolean, time: string }) => void;
   acceptRide: (driver: Driver) => void;
@@ -32,6 +39,10 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [driverLiveLocation, setDriverLiveLocation] = useState<{ lat: number; lng: number; } | null>(null);
   const [pricing, setPricing] = useState<PricingSettings>(initialPricing);
   const { user } = useAuth();
+  const [liveTripData, setLiveTripData] = useState<LiveTripData | null>(null);
+
+  const tripIntervalRef = useRef<number | null>(null);
+  const tripStartTimeRef = useRef<Date | null>(null);
 
   const getEstimatedFare = useCallback((vehicleType: VehicleType, distance: number, duration: number) => {
     const vehiclePricing = pricing[vehicleType];
@@ -69,6 +80,7 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       scheduledTime: schedule?.time
     };
     setRide(newRide);
+    setLiveTripData(null); // Clear any previous live data
   }, [user, getEstimatedFare]);
 
   const acceptRide = (driver: Driver) => {
@@ -95,13 +107,16 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if(ride) {
         setRide({ ...ride, status: RideStatus.CANCELLED });
         setDriverLiveLocation(null);
-        setTimeout(() => setRide(null), 3000);
+        setTimeout(() => {
+            setRide(null);
+            setLiveTripData(null);
+        }, 3000);
     }
   };
 
   const completeRide = () => {
     if (ride) {
-      const finalFare = getEstimatedFare(ride.vehicleType, ride.distance, ride.duration + Math.random() * 5); // Add random traffic delay
+      const finalFare = liveTripData?.currentFare ?? getEstimatedFare(ride.vehicleType, ride.distance, ride.duration + Math.random() * 5); 
       setRide({ 
           ...ride, 
           status: RideStatus.COMPLETED, 
@@ -109,16 +124,83 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           completedAt: new Date().toISOString() 
       });
       setDriverLiveLocation(null);
-      setTimeout(() => setRide(null), 5000);
+      setTimeout(() => {
+        setRide(null);
+        setLiveTripData(null);
+      }, 5000);
     }
   };
+  
+  // Effect to manage the live trip timer
+  useEffect(() => {
+    if (ride?.status === RideStatus.IN_PROGRESS) {
+      if (!tripIntervalRef.current) {
+        tripStartTimeRef.current = new Date();
+        
+        // Set initial state for the meter
+        setLiveTripData({
+          distanceTraveled: 0,
+          timeElapsed: 0,
+          currentFare: pricing[ride.vehicleType].baseFare,
+        });
+
+        const totalDistance = ride.distance;
+        const totalDurationInSeconds = ride.duration * 60;
+
+        tripIntervalRef.current = window.setInterval(() => {
+          if (!tripStartTimeRef.current || !ride || ride.status !== RideStatus.IN_PROGRESS) {
+              if (tripIntervalRef.current) {
+                clearInterval(tripIntervalRef.current);
+                tripIntervalRef.current = null;
+              }
+              return;
+          }
+          
+          const now = new Date();
+          const timeElapsed = (now.getTime() - tripStartTimeRef.current.getTime()) / 1000;
+
+          // Simulate distance based on time progress for a smooth meter
+          const progressRatio = totalDurationInSeconds > 0 ? Math.min(1, timeElapsed / totalDurationInSeconds) : 1;
+          const distanceTraveled = totalDistance * progressRatio;
+
+          // Calculate current fare
+          const vehiclePricing = pricing[ride.vehicleType];
+          const distanceFare = distanceTraveled * vehiclePricing.perKm;
+          const timeFare = (timeElapsed / 60) * vehiclePricing.perMinute;
+          const currentFare = vehiclePricing.baseFare + distanceFare + timeFare;
+
+          setLiveTripData({
+            distanceTraveled,
+            timeElapsed,
+            currentFare: Math.round(currentFare),
+          });
+        }, 1000);
+      }
+    } else {
+      // Cleanup: Stop the timer if ride is not in progress
+      if (tripIntervalRef.current) {
+        clearInterval(tripIntervalRef.current);
+        tripIntervalRef.current = null;
+        tripStartTimeRef.current = null;
+      }
+    }
+
+    // Main cleanup function for the effect
+    return () => {
+      if (tripIntervalRef.current) {
+        clearInterval(tripIntervalRef.current);
+        tripIntervalRef.current = null;
+      }
+    };
+  }, [ride, pricing]);
+
 
   const updatePricing = (newPricing: PricingSettings) => {
       setPricing(newPricing);
   };
 
   return (
-    <RideContext.Provider value={{ ride, driverLiveLocation, pricing, requestRide, acceptRide, cancelRide, completeRide, updatePricing, getEstimatedFare, updateRideStatus, updateDriverLocation }}>
+    <RideContext.Provider value={{ ride, driverLiveLocation, liveTripData, pricing, requestRide, acceptRide, cancelRide, completeRide, updatePricing, getEstimatedFare, updateRideStatus, updateDriverLocation }}>
       {children}
     </RideContext.Provider>
   );

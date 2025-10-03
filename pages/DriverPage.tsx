@@ -5,10 +5,11 @@ import InteractiveMap from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS } from '../constants';
 import { RideStatus, Driver, RouteInfo, Ride, SyrianProvinces } from '../types';
 import { getRoute } from '../services/mapService';
+import LiveTripDisplay from '../components/LiveTripDisplay';
 
 const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
-  const { ride, acceptRide, completeRide, updateRideStatus, updateDriverLocation } = useRide();
+  const { ride, acceptRide, completeRide, updateRideStatus, updateDriverLocation, liveTripData } = useRide();
   const [isOnline, setIsOnline] = useState(true);
   const [displayPolyline, setDisplayPolyline] = useState<[number, number][] | undefined>(undefined);
   const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number } | null>(null);
@@ -108,8 +109,9 @@ const DriverPage: React.FC = () => {
           const routeToPickup = await getRoute(driverLocation, ride.startLocation);
           setDisplayPolyline(routeToPickup.polyline);
         } else if (ride.status === RideStatus.IN_PROGRESS) {
-          // Route from pickup to destination (already stored in the ride object)
-          setDisplayPolyline(ride.polyline);
+          // Route from driver (now at pickup) to destination
+          const routeToDestination = await getRoute(driverLocation, ride.endLocation);
+          setDisplayPolyline(routeToDestination.polyline);
         } else {
           setDisplayPolyline(undefined);
         }
@@ -125,7 +127,7 @@ const DriverPage: React.FC = () => {
     };
 
     calculateAndSetRoute();
-  }, [ride, driverLocation]);
+  }, [ride?.status, driverLocation]);
 
   // Effect to calculate dynamic route info for the current leg of the journey
   useEffect(() => {
@@ -162,11 +164,11 @@ const DriverPage: React.FC = () => {
       }
     };
 
-    const debounceTimeout = setTimeout(calculateLegRoute, 500); // Debounce to avoid excessive API calls
+    const debounceTimeout = setTimeout(calculateLegRoute, 2000); // Debounce to avoid excessive API calls
 
     return () => clearTimeout(debounceTimeout);
     
-  }, [ride, driverLocation, isOnline]);
+  }, [ride?.status, driverLocation, isOnline]);
 
 
   // Effect to handle trip completion feedback
@@ -249,53 +251,63 @@ const DriverPage: React.FC = () => {
   }
   
   const CurrentTripInfo: React.FC = () => {
-      if(!ride || [RideStatus.REQUESTED, RideStatus.IDLE, RideStatus.COMPLETED, RideStatus.CANCELLED].includes(ride.status)) return null;
+    if(!ride || [RideStatus.REQUESTED, RideStatus.IDLE, RideStatus.COMPLETED, RideStatus.CANCELLED].includes(ride.status)) return null;
 
-      let statusText = '';
-      let actionButton = null;
-      
-      switch(ride.status) {
-          case RideStatus.ACCEPTED:
-              statusText = 'في الطريق إلى الزبون';
-              actionButton = <button onClick={() => updateRideStatus(RideStatus.PICKING_UP)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">لقد وصلت لموقع الالتقاط</button>;
-              break;
-          case RideStatus.PICKING_UP:
-              statusText = 'في انتظار ركوب الزبون';
-              actionButton = <button onClick={() => updateRideStatus(RideStatus.IN_PROGRESS)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">التقاط الزبون وبدء الرحلة</button>;
-              break;
-          case RideStatus.IN_PROGRESS:
-              statusText = 'الرحلة جارية مع الزبون';
-              actionButton = <button onClick={() => setShowEndTripConfirmation(true)} className="mt-4 px-8 py-2 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">إنهاء الرحلة</button>;
-              break;
-      }
-
-      return (
-         <div className="absolute bottom-0 right-0 left-0 bg-slate-800/95 backdrop-blur-sm p-4 shadow-lg z-10 text-center rounded-t-2xl">
-            <h3 className="text-lg font-bold">{statusText}</h3>
-
-            {currentLegInfo ? (
-                <div className="my-3 p-2 bg-slate-700/50 rounded-md text-center">
-                    <p>
-                        {ride.status === RideStatus.IN_PROGRESS ? 'المتبقي للوجهة' : 'المتبقي للوصول للزبون'}: 
-                        <span className="font-bold text-lg mx-2">{currentLegInfo.distance.toFixed(1)} كم</span> 
-                        (<span className="font-bold text-lg">~{Math.round(currentLegInfo.duration)} د</span>)
-                    </p>
-                </div>
-            ) : (
-                <div className="my-3 p-2 text-center text-slate-400 animate-pulse">
-                    ...جاري حساب المسافة المتبقية
-                </div>
-            )}
-
-            <div className="text-slate-300 mt-2">
-              <p>الزبون: علي الزبون - رقم الهاتف: 0912345678</p>
-              <p>من: {ride.startLocation.name}</p>
-              <p>إلى: {ride.endLocation.name}</p>
+    if (ride.status === RideStatus.IN_PROGRESS) {
+        return (
+            <div className="absolute bottom-0 right-0 left-0 bg-slate-800/95 backdrop-blur-sm p-4 shadow-lg z-10 text-center rounded-t-2xl">
+                <h3 className="text-lg font-bold">الرحلة جارية إلى: {ride.endLocation.name}</h3>
+                <p className="text-slate-300 mt-1">الزبون: علي الزبون - 0912345678</p>
+                {routeError && <p className="text-red-400 mt-2">{routeError}</p>}
+                <button 
+                    onClick={() => setShowEndTripConfirmation(true)} 
+                    className="mt-4 w-full max-w-xs mx-auto py-3 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">
+                    إنهاء الرحلة
+                </button>
             </div>
-            {routeError && <p className="text-red-400 mt-2">{routeError}</p>}
-            {actionButton}
-        </div>
-      );
+        );
+    }
+    
+    let statusText = '';
+    let actionButton = null;
+    
+    switch(ride.status) {
+        case RideStatus.ACCEPTED:
+            statusText = 'في الطريق إلى الزبون';
+            actionButton = <button onClick={() => updateRideStatus(RideStatus.PICKING_UP)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">لقد وصلت لموقع الالتقاط</button>;
+            break;
+        case RideStatus.PICKING_UP:
+            statusText = 'في انتظار ركوب الزبون';
+            actionButton = <button onClick={() => updateRideStatus(RideStatus.IN_PROGRESS)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">التقاط الزبون وبدء الرحلة</button>;
+            break;
+    }
+
+    return (
+       <div className="absolute bottom-0 right-0 left-0 bg-slate-800/95 backdrop-blur-sm p-4 shadow-lg z-10 text-center rounded-t-2xl">
+          <h3 className="text-lg font-bold">{statusText}</h3>
+
+          {currentLegInfo ? (
+              <div className="my-3 p-2 bg-slate-700/50 rounded-md text-center">
+                  <p>
+                      المتبقي للوصول للزبون: 
+                      <span className="font-bold text-lg mx-2">{currentLegInfo.distance.toFixed(1)} كم</span> 
+                      (<span className="font-bold text-lg">~{Math.round(currentLegInfo.duration)} د</span>)
+                  </p>
+              </div>
+          ) : (
+              <div className="my-3 p-2 text-center text-slate-400 animate-pulse">
+                  ...جاري حساب المسافة المتبقية
+              </div>
+          )}
+
+          <div className="text-slate-300 mt-2">
+            <p>الزبون: علي الزبون - رقم الهاتف: 0912345678</p>
+            <p>من: {ride.startLocation.name}</p>
+          </div>
+          {routeError && <p className="text-red-400 mt-2">{routeError}</p>}
+          {actionButton}
+      </div>
+    );
   }
 
   const ConfirmationDialog: React.FC<{ message: string; onConfirm: () => void; onCancel: () => void; }> = ({ message, onConfirm, onCancel }) => (
@@ -325,7 +337,7 @@ const DriverPage: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col relative">
-      <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-10">
+      <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-20">
         <h1 className="text-2xl font-bold text-primary">واجهة السائق</h1>
         <div className="flex items-center">
             <label className="relative inline-flex items-center cursor-pointer mr-5">
@@ -346,12 +358,16 @@ const DriverPage: React.FC = () => {
         />
       )}
 
-      {lastCompletedRide ? <TripSummary ride={lastCompletedRide} /> : (
-          <>
-            <IncomingRequest />
-            <CurrentTripInfo />
-          </>
+      {ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
+          <div className="absolute inset-x-0 top-0 z-10 pt-20">
+              <LiveTripDisplay {...liveTripData} />
+          </div>
+      ) : lastCompletedRide ? (
+          <TripSummary ride={lastCompletedRide} />
+      ) : (
+          <IncomingRequest />
       )}
+      <CurrentTripInfo />
 
       <div className="flex-grow">
         {driverLocation ? (

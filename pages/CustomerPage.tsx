@@ -5,6 +5,7 @@ import InteractiveMap from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
 import { RideStatus, RouteInfo, VehicleType, LocationSuggestion, Ride, SyrianProvinces } from '../types';
 import { getRoute, searchLocations } from '../services/mapService';
+import LiveTripDisplay from '../components/LiveTripDisplay';
 
 // Custom hook for debouncing input
 const useDebounce = (value: string, delay: number) => {
@@ -20,32 +21,14 @@ const useDebounce = (value: string, delay: number) => {
   return debouncedValue;
 };
 
-const calculateHaversineDistance = (
-  lat1: number, lon1: number,
-  lat2: number, lon2: number
-): number => {
-  const R = 6371; // Radius of the Earth in km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; // Distance in km
-};
-
-
 const CustomerPage: React.FC = () => {
   const { user, logout } = useAuth();
-  const { ride, requestRide, cancelRide, getEstimatedFare, driverLiveLocation } = useRide();
+  const { ride, requestRide, cancelRide, getEstimatedFare, driverLiveLocation, liveTripData } = useRide();
   
   // Location and Route State
   const [startLocation, setStartLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
   const [endLocation, setEndLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
-  const [tripProgress, setTripProgress] = useState<{ traveled: number, remaining: number, eta: number } | null>(null);
-  const initialTripDataRef = useRef<{ totalStraightLine: number } | null>(null);
   
   // UI and Flow State
   const [currentStep, setCurrentStep] = useState('setDestination'); // setDestination, selectVehicle, confirmRequest
@@ -145,7 +128,7 @@ const CustomerPage: React.FC = () => {
   // Effect to reset UI after a ride is completed
   useEffect(() => {
     // When the ride is completed and then cleared from the context, reset the UI for a new ride.
-    if (prevRideRef.current?.status === RideStatus.COMPLETED && !ride) {
+    if ((prevRideRef.current?.status === RideStatus.COMPLETED || prevRideRef.current?.status === RideStatus.CANCELLED) && !ride) {
       resetJourney();
     }
     // Store the current ride state for the next render to detect the change.
@@ -203,47 +186,6 @@ const CustomerPage: React.FC = () => {
     };
     calculateRoute();
   }, [startLocation, endLocation]);
-
-    // Effect to calculate trip progress
-  useEffect(() => {
-    if (ride?.status === RideStatus.IN_PROGRESS && driverLiveLocation && ride.endLocation && ride.startLocation) {
-        if (!initialTripDataRef.current) {
-            initialTripDataRef.current = {
-                totalStraightLine: calculateHaversineDistance(
-                    ride.startLocation.lat, ride.startLocation.lng,
-                    ride.endLocation.lat, ride.endLocation.lng
-                )
-            };
-        }
-
-        const totalStraightLine = initialTripDataRef.current.totalStraightLine;
-        if (totalStraightLine === 0) {
-            setTripProgress({ traveled: ride.distance, remaining: 0, eta: 0 });
-            return;
-        }
-
-        const remainingStraightLine = calculateHaversineDistance(
-            driverLiveLocation.lat, driverLiveLocation.lng,
-            ride.endLocation.lat, ride.endLocation.lng
-        );
-
-        const progressRatio = Math.min(1, Math.max(0, 1 - (remainingStraightLine / totalStraightLine)));
-        
-        const traveledDistance = ride.distance * progressRatio;
-        const remainingDistance = ride.distance - traveledDistance;
-        const eta = ride.duration * (1 - progressRatio);
-
-        setTripProgress({
-            traveled: parseFloat(traveledDistance.toFixed(2)),
-            remaining: parseFloat(remainingDistance.toFixed(2)),
-            eta: Math.round(eta),
-        });
-
-    } else {
-        setTripProgress(null);
-        initialTripDataRef.current = null; // Reset when trip ends or status changes
-    }
-  }, [driverLiveLocation, ride]);
   
   const handleSuggestionSelect = (suggestion: LocationSuggestion, type: 'start' | 'end') => {
     const newLocation = {
@@ -276,13 +218,12 @@ const CustomerPage: React.FC = () => {
   };
 
   const RideStatusIndicator = () => {
-    if (!ride) return null;
+    if (!ride || ride.status === RideStatus.IN_PROGRESS) return null; // IN_PROGRESS is handled by LiveTripDisplay
     let message = "";
     switch(ride.status) {
         case RideStatus.REQUESTED: message = ride.isScheduled ? `تم جدولة رحلتك بنجاح! سيتم البحث عن سائق في ${ride.scheduledTime}` : "جاري البحث عن سائق..."; break;
         case RideStatus.ACCEPTED: message = `تم العثور على سائق! السائق في طريقه إليك.`; break;
         case RideStatus.PICKING_UP: message = "السائق يقترب من موقعك."; break;
-        case RideStatus.IN_PROGRESS: message = "الرحلة جارية الآن إلى وجهتك."; break;
         case RideStatus.COMPLETED: message = `اكتملت الرحلة! الأجرة النهائية: ${ride.finalFare?.toLocaleString('ar-SY', { style: 'currency', currency: 'SYP' })}`; break;
         case RideStatus.CANCELLED: message = "تم إلغاء الرحلة."; break;
         default: return null;
@@ -296,12 +237,6 @@ const CustomerPage: React.FC = () => {
                     <p>رقم الهاتف: 0987654321</p>
                 </div>
             }
-             {ride.status === RideStatus.IN_PROGRESS && tripProgress && (
-                <div className="mt-2 text-sm grid grid-cols-2 gap-x-4">
-                    <p>المسافة المتبقية: <span className="font-bold">{tripProgress.remaining} كم</span></p>
-                    <p>الوقت المقدر للوصول: <span className="font-bold">~{tripProgress.eta} دقيقة</span></p>
-                </div>
-            )}
         </div>
     );
   }
@@ -311,7 +246,7 @@ const CustomerPage: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col relative overflow-hidden">
-      <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-10">
+      <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-20">
         <h1 className="text-2xl font-bold text-primary">ألو تكسي</h1>
         <div>
           <span className="ml-4">أهلاً، {user?.name}</span>
@@ -319,19 +254,25 @@ const CustomerPage: React.FC = () => {
         </div>
       </header>
 
+      {ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
+          <div className="absolute inset-x-0 top-0 z-10 pt-20">
+              <LiveTripDisplay {...liveTripData} />
+          </div>
+      ) : (
+          <RideStatusIndicator />
+      )}
+
       <div className="flex-grow relative">
         <InteractiveMap 
           center={startLocation ? [startLocation.lat, startLocation.lng] : provinceCenter}
-          userLocation={startLocation ?? undefined}
+          userLocation={ride?.status === RideStatus.IN_PROGRESS ? driverLiveLocation ?? undefined : startLocation ?? undefined}
           driverLocation={driverLiveLocation ?? undefined}
           startLocation={ride?.status !== RideStatus.IDLE ? ride?.startLocation : startLocation ?? undefined}
           endLocation={ride?.status !== RideStatus.IDLE ? ride?.endLocation : endLocation ?? undefined}
-          routePolyline={routeInfo?.polyline || ride?.polyline}
+          routePolyline={ride?.polyline || routeInfo?.polyline}
         />
       </div>
 
-       <RideStatusIndicator/>
-      
       {/* --- Booking Panel --- */}
       { !ride &&
       <div 
@@ -410,7 +351,8 @@ const CustomerPage: React.FC = () => {
                                   >
                                       <span className="text-4xl">{v.icon}</span>
                                       <p className="mt-1 font-semibold">{v.ar}</p>
-                                      <p className="text-sm text-slate-300">{fare.toLocaleString('ar-SY', { style: 'currency', currency: 'SYP' })}</p>
+
+                                      <p className="text-sm text-slate-300">{fare.toLocaleString('ar-SY', { style: 'currency', currency: 'SYP', minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
                                 </button>
                               );
                           })}
@@ -426,7 +368,7 @@ const CustomerPage: React.FC = () => {
                           <p><span className="font-semibold">من:</span> {startLocation?.name}</p>
                           <p><span className="font-semibold">إلى:</span> {endLocation?.name}</p>
                           <p><span className="font-semibold">المركبة:</span> {VEHICLE_TYPES.find(v => v.id === selectedVehicle)?.ar}</p>
-                          <p><span className="font-semibold">الأجرة التقديرية:</span> {getEstimatedFare(selectedVehicle, routeInfo.distance, routeInfo.duration).toLocaleString('ar-SY', { style: 'currency', currency: 'SYP' })}</p>
+                          <p><span className="font-semibold">الأجرة التقديرية:</span> {getEstimatedFare(selectedVehicle, routeInfo.distance, routeInfo.duration).toLocaleString('ar-SY', { style: 'currency', currency: 'SYP', minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
                       </div>
                       
                       <div className="flex items-center justify-center my-3">
