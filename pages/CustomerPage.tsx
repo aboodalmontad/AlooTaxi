@@ -22,12 +22,12 @@ const useDebounce = (value: string, delay: number) => {
 };
 
 const isLocationInSyria = (lat: number, lng: number) => {
-    // Greatly expanded bounds to be extremely forgiving of GPS inaccuracies.
+    // Greatly, greatly expanded bounds to be extremely forgiving of GPS inaccuracies.
     const SYRIA_BOUNDS = {
-        minLat: 31.0,
-        maxLat: 38.5,
-        minLng: 34.5,
-        maxLng: 43.5,
+        minLat: 30.0,
+        maxLat: 39.5,
+        minLng: 33.5,
+        maxLng: 44.5,
     };
     return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
            lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;

@@ -15,6 +15,7 @@ interface RideContextType {
   pricing: PricingSettings;
   requestRide: (start: any, end: any, vehicleType: VehicleType, routeInfo: RouteInfo, schedule?: { isScheduled: boolean, time: string }) => void;
   acceptRide: (driver: Driver) => void;
+  rejectRide: () => void;
   cancelRide: () => void;
   completeRide: () => void;
   updatePricing: (newPricing: PricingSettings) => void;
@@ -86,6 +87,14 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const acceptRide = (driver: Driver) => {
     if (ride && ride.status === RideStatus.REQUESTED) {
       setRide({ ...ride, status: RideStatus.ACCEPTED, driverId: driver.id });
+    }
+  };
+
+  const rejectRide = () => {
+    // For the mock, this simply dismisses the ride for the driver.
+    // In a real system, it would go back to a queue.
+    if (ride && ride.status === RideStatus.REQUESTED) {
+      setRide(null);
     }
   };
   
@@ -200,7 +209,7 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   return (
-    <RideContext.Provider value={{ ride, driverLiveLocation, liveTripData, pricing, requestRide, acceptRide, cancelRide, completeRide, updatePricing, getEstimatedFare, updateRideStatus, updateDriverLocation }}>
+    <RideContext.Provider value={{ ride, driverLiveLocation, liveTripData, pricing, requestRide, acceptRide, rejectRide, cancelRide, completeRide, updatePricing, getEstimatedFare, updateRideStatus, updateDriverLocation }}>
       {children}
     </RideContext.Provider>
   );

@@ -8,12 +8,12 @@ import { getRoute } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
 
 const isLocationInSyria = (lat: number, lng: number) => {
-    // Greatly expanded bounds to be extremely forgiving of GPS inaccuracies.
+    // Greatly, greatly expanded bounds to be extremely forgiving of GPS inaccuracies.
     const SYRIA_BOUNDS = {
-        minLat: 31.0,
-        maxLat: 38.5,
-        minLng: 34.5,
-        maxLng: 43.5,
+        minLat: 30.0,
+        maxLat: 39.5,
+        minLng: 33.5,
+        maxLng: 44.5,
     };
     return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
            lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;
@@ -21,7 +21,7 @@ const isLocationInSyria = (lat: number, lng: number) => {
 
 const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
-  const { ride, acceptRide, completeRide, updateRideStatus, updateDriverLocation, liveTripData } = useRide();
+  const { ride, acceptRide, rejectRide, completeRide, updateRideStatus, updateDriverLocation, liveTripData } = useRide();
   const [isOnline, setIsOnline] = useState(true);
   const [displayPolyline, setDisplayPolyline] = useState<[number, number][] | undefined>(undefined);
   const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number } | null>(null);
@@ -34,6 +34,7 @@ const DriverPage: React.FC = () => {
   const [showEndTripConfirmation, setShowEndTripConfirmation] = useState(false);
   const [isManualLocating, setIsManualLocating] = useState(false);
   const watchIdRef = useRef<number | null>(null);
+  const routeCalculationTimeoutRef = useRef<number | null>(null);
   
   const driver = user as Driver;
   
@@ -203,6 +204,11 @@ const DriverPage: React.FC = () => {
 
   // Effect to calculate and display route for active trip stages
   useEffect(() => {
+    // Clear any pending calculation when dependencies change
+    if (routeCalculationTimeoutRef.current) {
+        clearTimeout(routeCalculationTimeoutRef.current);
+    }
+
     const calculateAndSetRoute = async () => {
       if (!ride || !driverLocation) {
         setDisplayPolyline(undefined);
@@ -212,30 +218,44 @@ const DriverPage: React.FC = () => {
 
       try {
         setRouteError(null); // Clear previous errors
+        let destination;
         if (ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.PICKING_UP) {
           // Route from driver to pickup location
-          const routeToPickup = await getRoute(driverLocation, ride.startLocation);
-          setDisplayPolyline(routeToPickup.polyline);
+          destination = ride.startLocation;
         } else if (ride.status === RideStatus.IN_PROGRESS) {
-          // Route from driver (now at pickup) to destination
-          const routeToDestination = await getRoute(driverLocation, ride.endLocation);
-          setDisplayPolyline(routeToDestination.polyline);
+          // Route from driver to destination
+          destination = ride.endLocation;
         } else {
+          // For any other status, there's no route to display
           setDisplayPolyline(undefined);
+          return;
         }
+
+        const route = await getRoute(driverLocation, destination);
+        setDisplayPolyline(route.polyline);
+
       } catch(error) {
         console.error("Driver route calculation failed:", error);
         setDisplayPolyline(undefined);
         if (error instanceof Error) {
             setRouteError(`فشل حساب المسار: ${error.message}`);
-          } else {
+        } else {
             setRouteError("فشل حساب المسار لسبب غير معروف.");
-          }
+        }
       }
     };
 
-    calculateAndSetRoute();
-  }, [ride?.status, driverLocation]);
+    // Debounce the route calculation to avoid excessive API calls during rapid location updates
+    routeCalculationTimeoutRef.current = window.setTimeout(() => {
+        calculateAndSetRoute();
+    }, 1500); // 1.5-second debounce
+
+    return () => {
+      if (routeCalculationTimeoutRef.current) {
+        clearTimeout(routeCalculationTimeoutRef.current);
+      }
+    };
+  }, [ride?.status, driverLocation, ride?.startLocation, ride?.endLocation]);
 
   // Effect to calculate dynamic route info for the current leg of the journey
   useEffect(() => {
@@ -293,7 +313,13 @@ const DriverPage: React.FC = () => {
   }, [ride, lastCompletedRide]);
 
   const handleAcceptRide = () => {
-      acceptRide(driver);
+      if (ride) {
+        acceptRide(driver);
+      }
+  };
+
+  const handleRejectRide = () => {
+    rejectRide();
   };
 
   const handleConfirmEndTrip = () => {
@@ -406,7 +432,7 @@ const DriverPage: React.FC = () => {
               <p className="text-lg font-bold mt-2">أرباحك المتوقعة: {driverShare.toLocaleString('ar-SY', {style: 'currency', currency: 'SYP'})}</p>
               <div className="flex justify-around mt-4">
                   <button onClick={handleAcceptRide} className="px-8 py-2 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transform hover:scale-105">قبول</button>
-                  <button className="px-8 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transform hover:scale-105">رفض</button>
+                  <button onClick={handleRejectRide} className="px-8 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transform hover:scale-105">رفض</button>
               </div>
           </div>
       );

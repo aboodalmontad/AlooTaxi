@@ -53,9 +53,20 @@ export const getRoute = async (
   }
   
   // Pre-flight distance check to prevent pointless API calls that will surely fail.
-  const MAX_REASONABLE_DISTANCE_KM = 1500; // A safe buffer for a country-wide app.
   const haversineDistance = getHaversineDistance(start, end);
 
+  // Pre-flight check for extremely close points to prevent API errors.
+  const VERY_CLOSE_DISTANCE_KM = 0.05; // 50 meters
+  if (haversineDistance < VERY_CLOSE_DISTANCE_KM) {
+    console.warn(`Route calculation aborted pre-flight: points are too close (${haversineDistance.toFixed(4)}km). Returning zero-length route.`);
+    return {
+      distance: 0,
+      duration: 0,
+      polyline: [[start.lat, start.lng], [end.lat, end.lng]],
+    };
+  }
+
+  const MAX_REASONABLE_DISTANCE_KM = 1500; // A safe buffer for a country-wide app.
   if (haversineDistance > MAX_REASONABLE_DISTANCE_KM) {
     const errorMsg = `المسافة بين النقطتين (${Math.round(haversineDistance)} كم) كبيرة جداً. يرجى التحقق من المواقع المحددة.`;
     console.error(`Route calculation aborted pre-flight due to excessive distance: ${haversineDistance.toFixed(2)}km`, { start, end });
@@ -154,7 +165,6 @@ export const getRoute = async (
       .map((coord: [number, number]) => [coord[1], coord[0]]);
 
     if (polyline.length < 2) {
-      const VERY_CLOSE_DISTANCE_KM = 0.05; // 50 meters
       if (haversineDistance < VERY_CLOSE_DISTANCE_KM) {
         console.warn(`Polyline has < 2 points, but Haversine distance is very small (${haversineDistance.toFixed(4)}km). Treating as a zero-length route.`);
         return {
