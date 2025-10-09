@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
@@ -57,6 +58,8 @@ const CustomerPage: React.FC = () => {
   const fetchUserLocation = useCallback(() => {
     setIsLocating(true);
     setStartQuery("...جاري تحديد الموقع");
+    setRouteInfo(null); // Explicitly clear previous route from map and state
+    setRouteError(null); // Clear any old errors
 
     const setDefaultLocation = () => {
         const defaultLocation = { lat: DAMASCUS_COORDS[0], lng: DAMASCUS_COORDS[1], name: "موقع افتراضي" };
@@ -93,17 +96,16 @@ const CustomerPage: React.FC = () => {
             message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك. يرجى المحاولة مرة أخرى.";
             break;
         }
-        alert(message + " سيتم استخدام موقع افتراضي.");
+        setRouteError(message + " سيتم استخدام موقع افتراضي.");
         setDefaultLocation();
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
-    // FIX: Explicitly list state setters in dependency array to satisfy strict linting rules
-    // which may be causing the cryptic "Expected 1 arguments, but got 0" error.
-  }, [setIsLocating, setStartQuery, setStartLocation]);
+  }, []);
 
   const resetJourney = useCallback(() => {
-      // Reset the journey state when user explicitly re-requests their location or after a trip
+      setStartLocation(null);
+      setStartQuery('');
       setEndLocation(null);
       setEndQuery('');
       setRouteInfo(null);
@@ -112,14 +114,11 @@ const CustomerPage: React.FC = () => {
       setSelectedVehicle(null);
       setIsScheduling(false);
       setScheduledTime('');
-      // Fetch fresh location
-      fetchUserLocation();
-  }, [fetchUserLocation]);
+  }, []);
 
 
-  // Effect to get initial user location on component mount
+  // Effect to get initial user location on component mount or after a reset
   useEffect(() => {
-    // Only fetch if location hasn't been set yet.
     if (!startLocation) {
       fetchUserLocation();
     }
@@ -307,7 +306,7 @@ const CustomerPage: React.FC = () => {
                                className="w-full p-3 pl-10 bg-slate-700 rounded-lg"
                                disabled={isLocating}
                            />
-                           <button onClick={resetJourney} disabled={isLocating} className="absolute left-2 top-1/2 -translate-y-1/2 text-2xl" title="تحديد موقعي الحالي">🎯</button>
+                           <button onClick={fetchUserLocation} disabled={isLocating} className="absolute left-2 top-1/2 -translate-y-1/2 text-2xl" title="تحديد موقعي الحالي">🎯</button>
                            {activeInput === 'start' && startSuggestions.length > 0 && (
                                <ul className="absolute bottom-full left-0 right-0 bg-slate-600 rounded-lg shadow-lg z-20 max-h-40 overflow-y-auto mb-1">
                                    {startSuggestions.map(s => <li key={s.name + s.coordinates.lat} onClick={() => handleSuggestionSelect(s, 'start')} className="p-2 hover:bg-primary cursor-pointer">{s.name}</li>)}

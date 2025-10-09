@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
@@ -18,6 +19,7 @@ const DriverPage: React.FC = () => {
 
   const [lastCompletedRide, setLastCompletedRide] = useState<Ride | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const [showEndTripConfirmation, setShowEndTripConfirmation] = useState(false);
   const watchIdRef = useRef<number | null>(null);
   
@@ -34,6 +36,7 @@ const DriverPage: React.FC = () => {
     }
 
     const success = (position: GeolocationPosition) => {
+      setLocationError(null); // Clear any previous error
       const newLocation = {
         lat: position.coords.latitude,
         lng: position.coords.longitude,
@@ -44,10 +47,28 @@ const DriverPage: React.FC = () => {
 
     const error = (err: GeolocationPositionError) => {
       console.error("Geolocation error:", err.message);
+      let message = "";
+      switch (err.code) {
+        case err.PERMISSION_DENIED:
+          message = "تم رفض إذن الوصول إلى الموقع. لن تتمكن من تلقي الطلبات بدون تفعيله.";
+          setIsOnline(false); // Force driver offline if location is denied
+          break;
+        case err.POSITION_UNAVAILABLE:
+          message = "معلومات الموقع غير متاحة حالياً. يرجى التحقق من إشارة GPS.";
+          break;
+        case err.TIMEOUT:
+          message = "انتهت مهلة طلب تحديد الموقع. حاول مرة أخرى.";
+          break;
+        default:
+          message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
+          break;
+      }
+      setLocationError(message);
+
       setDriverLocation(currentLocation => {
         if (!currentLocation) {
-            alert("لا يمكن الوصول إلى موقعك. تأكد من تفعيل خدمات الموقع والسماح بالوصول. سيتم استخدام موقع افتراضي.");
-            const provinceCoords = DAMASCUS_COORDS;
+            console.warn("Using default location for driver as fallback.");
+            const provinceCoords = PROVINCE_COORDS[driver?.province || SyrianProvinces.DAMASCUS] || DAMASCUS_COORDS;
             const defaultLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
             updateDriverLocation(defaultLocation);
             return defaultLocation;
@@ -356,6 +377,13 @@ const DriverPage: React.FC = () => {
             onConfirm={handleConfirmEndTrip}
             onCancel={() => setShowEndTripConfirmation(false)}
         />
+      )}
+
+      {locationError && (
+        <div className="absolute top-20 right-4 left-4 bg-red-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
+            <p className="font-bold">خطأ في تحديد الموقع</p>
+            <p>{locationError}</p>
+        </div>
       )}
 
       {ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
