@@ -154,7 +154,15 @@ export const getRoute = async (
       .map((coord: [number, number]) => [coord[1], coord[0]]);
 
     if (polyline.length < 2) {
-      // This case handles a LineString with 0 or 1 valid points.
+      const VERY_CLOSE_DISTANCE_KM = 0.05; // 50 meters
+      if (haversineDistance < VERY_CLOSE_DISTANCE_KM) {
+        console.warn(`Polyline has < 2 points, but Haversine distance is very small (${haversineDistance.toFixed(4)}km). Treating as a zero-length route.`);
+        return {
+          distance: 0,
+          duration: 0,
+          polyline: [[start.lat, start.lng], [end.lat, end.lng]],
+        };
+      }
       console.error("Could not form a valid polyline from LineString geometry (less than 2 valid points). This can happen for unroutable points.", { original: rawCoords, filtered: polyline });
       throw new Error("لا يمكن إنشاء خط مسار صالح من البيانات المستلمة. قد تكون نقاط المسار غير صالحة.");
     }

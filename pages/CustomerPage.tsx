@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
@@ -23,11 +22,12 @@ const useDebounce = (value: string, delay: number) => {
 };
 
 const isLocationInSyria = (lat: number, lng: number) => {
+    // Expanded bounds to be more forgiving of GPS inaccuracies near borders.
     const SYRIA_BOUNDS = {
-        minLat: 32.0,
-        maxLat: 37.5,
-        minLng: 35.5,
-        maxLng: 42.5,
+        minLat: 31.8,
+        maxLat: 37.7,
+        minLng: 35.3,
+        maxLng: 42.7,
     };
     return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
            lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;
