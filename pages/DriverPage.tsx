@@ -10,10 +10,10 @@ import LiveTripDisplay from '../components/LiveTripDisplay';
 const isLocationInSyria = (lat: number, lng: number) => {
     // Expanded bounds to be more forgiving of GPS inaccuracies near borders.
     const SYRIA_BOUNDS = {
-        minLat: 31.8,
-        maxLat: 37.7,
-        minLng: 35.3,
-        maxLng: 42.7,
+        minLat: 31.5,
+        maxLat: 38.0,
+        minLng: 35.0,
+        maxLng: 43.0,
     };
     return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
            lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;
