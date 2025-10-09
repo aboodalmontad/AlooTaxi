@@ -49,6 +49,7 @@ const CustomerPage: React.FC = () => {
   const [isLocating, setIsLocating] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(true);
   
   // Search and Autocomplete State
@@ -74,6 +75,7 @@ const CustomerPage: React.FC = () => {
     setRouteInfo(null);
     setRouteError(null);
     setLocationError(null);
+    setLocationWarning(null);
 
     const handleLocationError = (message: string, isPermissionError = false) => {
         const province = user?.province || SyrianProvinces.DAMASCUS;
@@ -110,18 +112,20 @@ const CustomerPage: React.FC = () => {
     })
     .then(position => {
         const { latitude, longitude } = position.coords;
+        const newLocation = { 
+            lat: latitude, 
+            lng: longitude,
+            name: "موقعي الحالي"
+        };
+        setStartLocation(newLocation);
+        setStartQuery("موقعي الحالي");
+        setIsLocating(false);
+        setLocationError(null);
+
         if (isLocationInSyria(latitude, longitude)) {
-            setLocationError(null);
-            const newLocation = { 
-                lat: latitude, 
-                lng: longitude,
-                name: "موقعي الحالي"
-            };
-            setStartLocation(newLocation);
-            setStartQuery("موقعي الحالي");
-            setIsLocating(false);
+            setLocationWarning(null);
         } else {
-            handleLocationError("تم تحديد موقع خارج النطاق الجغرافي للخدمة.", false);
+            setLocationWarning("تحذير: تم تحديد موقع خارج النطاق الجغرافي للخدمة. قد لا تتمكن من طلب رحلة.");
             console.warn(`Geolocation API returned coordinates outside Syria for customer: ${latitude}, ${longitude}`);
         }
     })
@@ -155,6 +159,7 @@ const CustomerPage: React.FC = () => {
       setRouteInfo(null);
       setRouteError(null);
       setLocationError(null);
+      setLocationWarning(null);
       setCurrentStep('setDestination');
       setSelectedVehicle(null);
       setIsScheduling(false);
@@ -242,6 +247,7 @@ const CustomerPage: React.FC = () => {
         setStartQuery(suggestion.name);
         setStartSuggestions([]);
         setLocationError(null);
+        setLocationWarning(null);
     } else {
         setEndLocation(newLocation);
         setEndQuery(suggestion.name);
@@ -305,6 +311,13 @@ const CustomerPage: React.FC = () => {
             <p>{locationError}</p>
         </div>
       )}
+      
+      {locationWarning && !locationError && (
+        <div className="absolute top-20 right-4 left-4 bg-yellow-600/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-10 text-center animate-fade-in-down">
+            <p className="font-bold">تنبيه بشأن الموقع</p>
+            <p>{locationWarning}</p>
+        </div>
+      )}
 
       {ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
           <div className="absolute inset-x-0 top-0 z-10 pt-20">
@@ -354,6 +367,7 @@ const CustomerPage: React.FC = () => {
                                    setStartQuery(e.target.value);
                                    setRouteError(null);
                                    setLocationError(null);
+                                   setLocationWarning(null);
                                }}
                                onFocus={() => setActiveInput('start')}
                                placeholder="نقطة الانطلاق"

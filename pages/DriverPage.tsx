@@ -31,6 +31,7 @@ const DriverPage: React.FC = () => {
   const [lastCompletedRide, setLastCompletedRide] = useState<Ride | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [showEndTripConfirmation, setShowEndTripConfirmation] = useState(false);
   const [isManualLocating, setIsManualLocating] = useState(false);
   const watchIdRef = useRef<number | null>(null);
@@ -54,6 +55,7 @@ const DriverPage: React.FC = () => {
             fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
         }
         setLocationError(fullMessage);
+        setLocationWarning(null);
 
         if (forceOffline) {
             setIsOnline(false);
@@ -74,16 +76,18 @@ const DriverPage: React.FC = () => {
     })
     .then(position => {
         const { latitude, longitude } = position.coords;
+        const newLocation = {
+            lat: latitude,
+            lng: longitude,
+        };
+        setDriverLocation(newLocation);
+        updateDriverLocation(newLocation);
+        setLocationError(null);
+
         if (isLocationInSyria(latitude, longitude)) {
-            setLocationError(null);
-            const newLocation = {
-                lat: latitude,
-                lng: longitude,
-            };
-            setDriverLocation(newLocation);
-            updateDriverLocation(newLocation);
+            setLocationWarning(null);
         } else {
-             handleLocationError("تم تحديد موقع خارج النطاق الجغرافي للخدمة.", false, false);
+             setLocationWarning("تحذير: موقعك الحالي خارج منطقة الخدمة. قد لا تستقبل طلبات.");
              console.warn(`Geolocation API returned coordinates outside Syria: ${latitude}, ${longitude}`);
         }
     })
@@ -132,17 +136,19 @@ const DriverPage: React.FC = () => {
 
     const success = (position: GeolocationPosition) => {
         const { latitude, longitude } = position.coords;
+        const newLocation = {
+            lat: latitude,
+            lng: longitude,
+        };
+        setDriverLocation(newLocation);
+        updateDriverLocation(newLocation);
+        setLocationError(null); // Clear any intermittent error on success
+
         if (isLocationInSyria(latitude, longitude)) {
-            setLocationError(null); // Clear any intermittent error on success
-            const newLocation = {
-                lat: latitude,
-                lng: longitude,
-            };
-            setDriverLocation(newLocation);
-            updateDriverLocation(newLocation);
+            setLocationWarning(null); // Good location, clear warning
         } else {
-            console.warn(`watchPosition received an out-of-bounds location, ignoring update: ${latitude}, ${longitude}`);
-            setLocationError("تم استلام موقع خارج منطقة الخدمة. يتم تجاهل التحديث.");
+            console.warn(`watchPosition received an out-of-bounds location: ${latitude}, ${longitude}`);
+            setLocationWarning(current => current || "تحذير: تتبع الموقع خارج منطقة الخدمة.");
         }
     };
 
@@ -330,6 +336,7 @@ const DriverPage: React.FC = () => {
   const handleManualLocate = () => {
     setIsManualLocating(true);
     setLocationError(null);
+    setLocationWarning(null);
 
     const handleError = (error: GeolocationPositionError) => {
         let message = "";
@@ -361,16 +368,18 @@ const DriverPage: React.FC = () => {
     navigator.geolocation.getCurrentPosition(
         position => {
             const { latitude, longitude } = position.coords;
+            const newLocation = { lat: latitude, lng: longitude };
+            setDriverLocation(newLocation);
+            updateDriverLocation(newLocation);
+            setIsManualLocating(false);
+            setLocationError(null);
+
             if (isLocationInSyria(latitude, longitude)) {
-                setLocationError(null);
-                const newLocation = { lat: latitude, lng: longitude };
-                setDriverLocation(newLocation);
-                updateDriverLocation(newLocation);
+                setLocationWarning(null);
             } else {
-                 setLocationError("تم تحديد موقع خارج النطاق الجغرافي للخدمة.");
+                 setLocationWarning("تحذير: الموقع المحدد يدوياً خارج منطقة الخدمة.");
                  console.warn(`Manual locate returned coordinates outside Syria: ${latitude}, ${longitude}`);
             }
-            setIsManualLocating(false);
         },
         handleError,
         {
@@ -566,6 +575,13 @@ const DriverPage: React.FC = () => {
         <div className="absolute top-20 right-4 left-4 bg-red-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
             <p className="font-bold">خطأ في تحديد الموقع</p>
             <p>{locationError}</p>
+        </div>
+      )}
+
+      {locationWarning && !locationError && (
+        <div className="absolute top-20 right-4 left-4 bg-yellow-600/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
+            <p className="font-bold">تنبيه بشأن الموقع</p>
+            <p>{locationWarning}</p>
         </div>
       )}
 
