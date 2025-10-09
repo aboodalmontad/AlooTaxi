@@ -11,6 +11,30 @@ export const setMapApiKey = (newKey: string) => {
 const DIRECTIONS_API_URL = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
 const GEOCODE_API_URL = 'https://api.openrouteservice.org/geocode/search';
 
+/**
+ * Calculates the Haversine distance between two points on the Earth.
+ * @param coords1 - The first coordinate object { lat, lng }.
+ * @param coords2 - The second coordinate object { lat, lng }.
+ * @returns The distance in kilometers.
+ */
+const getHaversineDistance = (
+  coords1: { lat: number; lng: number },
+  coords2: { lat: number; lng: number }
+): number => {
+  const R = 6371; // Radius of the Earth in km
+  const dLat = (coords2.lat - coords1.lat) * (Math.PI / 180);
+  const dLon = (coords2.lng - coords1.lng) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(coords1.lat * (Math.PI / 180)) *
+      Math.cos(coords2.lat * (Math.PI / 180)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Distance in km
+};
+
+
 export const getRoute = async (
   start: { lat: number, lng: number },
   end: { lat: number, lng: number }
@@ -28,6 +52,16 @@ export const getRoute = async (
     return Promise.reject(new Error(errorMsg));
   }
   
+  // Pre-flight distance check to prevent pointless API calls that will surely fail.
+  const MAX_REASONABLE_DISTANCE_KM = 1500; // A safe buffer for a country-wide app.
+  const haversineDistance = getHaversineDistance(start, end);
+
+  if (haversineDistance > MAX_REASONABLE_DISTANCE_KM) {
+    const errorMsg = `المسافة بين النقطتين (${Math.round(haversineDistance)} كم) كبيرة جداً. يرجى التحقق من المواقع المحددة.`;
+    console.error(`Route calculation aborted pre-flight due to excessive distance: ${haversineDistance.toFixed(2)}km`, { start, end });
+    return Promise.reject(new Error(errorMsg));
+  }
+
   const coordinates = [[start.lng, start.lat], [end.lng, end.lat]];
 
   try {

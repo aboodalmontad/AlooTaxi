@@ -22,6 +22,18 @@ const useDebounce = (value: string, delay: number) => {
   return debouncedValue;
 };
 
+const isLocationInSyria = (lat: number, lng: number) => {
+    const SYRIA_BOUNDS = {
+        minLat: 32.0,
+        maxLat: 37.5,
+        minLng: 35.5,
+        maxLng: 42.5,
+    };
+    return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
+           lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;
+};
+
+
 const CustomerPage: React.FC = () => {
   const { user, logout } = useAuth();
   const { ride, requestRide, cancelRide, getEstimatedFare, driverLiveLocation, liveTripData } = useRide();
@@ -36,6 +48,7 @@ const CustomerPage: React.FC = () => {
   const [isLoadingRoute, setIsLoadingRoute] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(true);
   
   // Search and Autocomplete State
@@ -58,50 +71,81 @@ const CustomerPage: React.FC = () => {
   const fetchUserLocation = useCallback(() => {
     setIsLocating(true);
     setStartQuery("...جاري تحديد الموقع");
-    setRouteInfo(null); // Explicitly clear previous route from map and state
-    setRouteError(null); // Clear any old errors
+    setRouteInfo(null);
+    setRouteError(null);
+    setLocationError(null);
 
-    const setDefaultLocation = () => {
-        const defaultLocation = { lat: DAMASCUS_COORDS[0], lng: DAMASCUS_COORDS[1], name: "موقع افتراضي" };
+    const handleLocationError = (message: string, isPermissionError = false) => {
+        const province = user?.province || SyrianProvinces.DAMASCUS;
+        const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
+        const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
+        const defaultLocation = { 
+            lat: provinceCoords[0], 
+            lng: provinceCoords[1], 
+            name: `وسط ${provinceName}`
+        };
+        
         setStartLocation(defaultLocation);
-        setStartQuery("موقع افتراضي");
+        setStartQuery(defaultLocation.name);
+        
+        let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
+        if (isPermissionError) {
+            fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
+        }
+        setLocationError(fullMessage);
+        setIsLocating(false);
     };
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
+    if (!navigator.geolocation) {
+        handleLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
+        return;
+    }
+
+    new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 20000, // Increased timeout for better results
+            maximumAge: 0,
+        });
+    })
+    .then(position => {
         const { latitude, longitude } = position.coords;
-        const newLocation = { 
-          lat: latitude, 
-          lng: longitude,
-          name: "موقعي الحالي"
-        };
-        setStartLocation(newLocation);
-        setStartQuery("موقعي الحالي");
-        setIsLocating(false);
-      },
-      (error) => {
-        setIsLocating(false);
-        let message = "";
-        switch (error.code) {
-          case error.PERMISSION_DENIED:
-            message = "تم رفض إذن الوصول إلى الموقع. لاستخدام هذه الميزة، يرجى تفعيل إذن الموقع من إعدادات المتصفح.";
-            break;
-          case error.POSITION_UNAVAILABLE:
-            message = "تعذر تحديد موقعك الحالي. قد تكون إشارة GPS ضعيفة أو أن خدمات الموقع غير متوفرة في منطقتك.";
-            break;
-          case error.TIMEOUT:
-            message = "انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مرة أخرى في مكان به استقبال أفضل.";
-            break;
-          default:
-            message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك. يرجى المحاولة مرة أخرى.";
-            break;
+        if (isLocationInSyria(latitude, longitude)) {
+            setLocationError(null);
+            const newLocation = { 
+                lat: latitude, 
+                lng: longitude,
+                name: "موقعي الحالي"
+            };
+            setStartLocation(newLocation);
+            setStartQuery("موقعي الحالي");
+            setIsLocating(false);
+        } else {
+            handleLocationError("تم تحديد موقع خارج النطاق الجغرافي للخدمة.", false);
+            console.warn(`Geolocation API returned coordinates outside Syria for customer: ${latitude}, ${longitude}`);
         }
-        setRouteError(message + " سيتم استخدام موقع افتراضي.");
-        setDefaultLocation();
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
-  }, []);
+    })
+    .catch((error: GeolocationPositionError) => {
+        let message = "";
+        let isPermissionError = false;
+        switch (error.code) {
+            case error.PERMISSION_DENIED:
+                message = "تم رفض إذن الوصول إلى الموقع.";
+                isPermissionError = true;
+                break;
+            case error.POSITION_UNAVAILABLE:
+                message = "تعذر تحديد موقعك الحالي. يرجى التأكد من أن إشارة GPS قوية.";
+                break;
+            case error.TIMEOUT:
+                message = "انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مرة أخرى.";
+                break;
+            default:
+                message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
+                break;
+        }
+        handleLocationError(message, isPermissionError);
+    });
+  }, [user]);
 
   const resetJourney = useCallback(() => {
       setStartLocation(null);
@@ -110,6 +154,7 @@ const CustomerPage: React.FC = () => {
       setEndQuery('');
       setRouteInfo(null);
       setRouteError(null);
+      setLocationError(null);
       setCurrentStep('setDestination');
       setSelectedVehicle(null);
       setIsScheduling(false);
@@ -137,7 +182,7 @@ const CustomerPage: React.FC = () => {
 
   // Effect for fetching start location suggestions
   useEffect(() => {
-    if (debouncedStartQuery && debouncedStartQuery !== 'موقعي الحالي' && activeInput === 'start') {
+    if (debouncedStartQuery && debouncedStartQuery !== 'موقعي الحالي' && !debouncedStartQuery.startsWith('وسط ') && activeInput === 'start') {
       const fetchSuggestions = async () => {
         const results = await searchLocations(debouncedStartQuery, startLocation ?? undefined);
         setStartSuggestions(results);
@@ -196,6 +241,7 @@ const CustomerPage: React.FC = () => {
         setStartLocation(newLocation);
         setStartQuery(suggestion.name);
         setStartSuggestions([]);
+        setLocationError(null);
     } else {
         setEndLocation(newLocation);
         setEndQuery(suggestion.name);
@@ -253,6 +299,13 @@ const CustomerPage: React.FC = () => {
         </div>
       </header>
 
+      {locationError && (
+        <div className="absolute top-20 right-4 left-4 bg-red-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-10 text-center animate-fade-in-down">
+            <p className="font-bold">خطأ في تحديد الموقع</p>
+            <p>{locationError}</p>
+        </div>
+      )}
+
       {ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
           <div className="absolute inset-x-0 top-0 z-10 pt-20">
               <LiveTripDisplay {...liveTripData} />
@@ -300,6 +353,7 @@ const CustomerPage: React.FC = () => {
                                onChange={e => {
                                    setStartQuery(e.target.value);
                                    setRouteError(null);
+                                   setLocationError(null);
                                }}
                                onFocus={() => setActiveInput('start')}
                                placeholder="نقطة الانطلاق"

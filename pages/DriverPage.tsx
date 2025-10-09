@@ -1,12 +1,23 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
 import InteractiveMap from '../components/InteractiveMap';
-import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS } from '../constants';
+import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
 import { RideStatus, Driver, RouteInfo, Ride, SyrianProvinces } from '../types';
 import { getRoute } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
+
+const isLocationInSyria = (lat: number, lng: number) => {
+    const SYRIA_BOUNDS = {
+        minLat: 32.0,
+        maxLat: 37.5,
+        minLng: 35.5,
+        maxLng: 42.5,
+    };
+    return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
+           lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;
+};
 
 const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
@@ -21,14 +32,97 @@ const DriverPage: React.FC = () => {
   const [routeError, setRouteError] = useState<string | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [showEndTripConfirmation, setShowEndTripConfirmation] = useState(false);
+  const [isManualLocating, setIsManualLocating] = useState(false);
   const watchIdRef = useRef<number | null>(null);
   
   const driver = user as Driver;
+  
+  const fetchInitialDriverLocation = useCallback(() => {
+    const handleLocationError = (message: string, forceOffline = false, isPermissionError = false) => {
+        const province = driver?.province || SyrianProvinces.DAMASCUS;
+        const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
+        const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
+        const defaultLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
 
-  // Effect for real-time location tracking
+        // Set location only if it's not already set, to avoid overwriting a good location from watchPosition
+        setDriverLocation(current => current ?? defaultLocation);
+        updateDriverLocation(defaultLocation);
+        
+        let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
+        if (isPermissionError) {
+            fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
+        }
+        setLocationError(fullMessage);
+
+        if (forceOffline) {
+            setIsOnline(false);
+        }
+    };
+
+    if (!navigator.geolocation) {
+        handleLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.", true);
+        return;
+    }
+
+    new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 20000,
+            maximumAge: 0,
+        });
+    })
+    .then(position => {
+        const { latitude, longitude } = position.coords;
+        if (isLocationInSyria(latitude, longitude)) {
+            setLocationError(null);
+            const newLocation = {
+                lat: latitude,
+                lng: longitude,
+            };
+            setDriverLocation(newLocation);
+            updateDriverLocation(newLocation);
+        } else {
+             handleLocationError("تم تحديد موقع خارج النطاق الجغرافي للخدمة.", false, false);
+             console.warn(`Geolocation API returned coordinates outside Syria: ${latitude}, ${longitude}`);
+        }
+    })
+    .catch((error: GeolocationPositionError) => {
+        let message = "";
+        let forceOffline = false;
+        let isPermissionError = false;
+        switch (error.code) {
+            case error.PERMISSION_DENIED:
+                message = "تم رفض إذن الوصول إلى الموقع. يجب تفعيله للعمل كسائق.";
+                forceOffline = true;
+                isPermissionError = true;
+                break;
+            case error.POSITION_UNAVAILABLE:
+                message = "إشارة GPS ضعيفة أو غير متاحة. سيتم استخدام موقع افتراضي.";
+                break;
+            case error.TIMEOUT:
+                message = "انتهت مهلة طلب تحديد الموقع. يرجى التحقق من اتصالك.";
+                break;
+            default:
+                message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
+                break;
+        }
+        handleLocationError(message, forceOffline, isPermissionError);
+    });
+  }, [driver, updateDriverLocation]);
+
+
+  // Effect for initial location fetch
   useEffect(() => {
-    if (!isOnline) {
-      if (watchIdRef.current) {
+    if (isOnline && !driverLocation) {
+        fetchInitialDriverLocation();
+    }
+  }, [isOnline, driverLocation, fetchInitialDriverLocation]);
+
+
+  // Effect for real-time location tracking (continuous watch)
+  useEffect(() => {
+    if (!isOnline || !driverLocation) { // Only start watching if online AND initial location is set
+      if (watchIdRef.current && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
@@ -36,64 +130,57 @@ const DriverPage: React.FC = () => {
     }
 
     const success = (position: GeolocationPosition) => {
-      setLocationError(null); // Clear any previous error
-      const newLocation = {
-        lat: position.coords.latitude,
-        lng: position.coords.longitude,
-      };
-      setDriverLocation(newLocation);
-      updateDriverLocation(newLocation);
+        const { latitude, longitude } = position.coords;
+        if (isLocationInSyria(latitude, longitude)) {
+            setLocationError(null); // Clear any intermittent error on success
+            const newLocation = {
+                lat: latitude,
+                lng: longitude,
+            };
+            setDriverLocation(newLocation);
+            updateDriverLocation(newLocation);
+        } else {
+            console.warn(`watchPosition received an out-of-bounds location, ignoring update: ${latitude}, ${longitude}`);
+            setLocationError("تم استلام موقع خارج منطقة الخدمة. يتم تجاهل التحديث.");
+        }
     };
 
     const error = (err: GeolocationPositionError) => {
-      console.error("Geolocation error:", err.message);
-      let message = "";
-      switch (err.code) {
-        case err.PERMISSION_DENIED:
-          message = "تم رفض إذن الوصول إلى الموقع. لن تتمكن من تلقي الطلبات بدون تفعيله.";
-          setIsOnline(false); // Force driver offline if location is denied
-          break;
-        case err.POSITION_UNAVAILABLE:
-          message = "معلومات الموقع غير متاحة حالياً. يرجى التحقق من إشارة GPS.";
-          break;
-        case err.TIMEOUT:
-          message = "انتهت مهلة طلب تحديد الموقع. حاول مرة أخرى.";
-          break;
-        default:
-          message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
-          break;
-      }
-      setLocationError(message);
-
-      setDriverLocation(currentLocation => {
-        if (!currentLocation) {
-            console.warn("Using default location for driver as fallback.");
-            const provinceCoords = PROVINCE_COORDS[driver?.province || SyrianProvinces.DAMASCUS] || DAMASCUS_COORDS;
-            const defaultLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
-            updateDriverLocation(defaultLocation);
-            return defaultLocation;
+        let message = "";
+        switch (err.code) {
+            case err.PERMISSION_DENIED:
+                message = "تم رفض إذن الموقع. تم إيقاف التتبع المباشر.";
+                setIsOnline(false); // Force offline
+                break;
+            case err.POSITION_UNAVAILABLE:
+                message = "إشارة GPS ضعيفة. جاري محاولة إعادة الاتصال...";
+                break;
+            case err.TIMEOUT:
+                message = "انتهت مهلة تحديث الموقع. تحقق من اتصالك.";
+                break;
+            default:
+                message = "حدث خطأ في تتبع الموقع.";
+                break;
         }
-        return currentLocation;
-      });
+        setLocationError(message);
     };
-
-    if (navigator.geolocation) {
-       // Get an initial position quickly for faster UI response
-      navigator.geolocation.getCurrentPosition(success, error);
-      // Then start watching for continuous updates
-      watchIdRef.current = navigator.geolocation.watchPosition(success, error, {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0
-      });
+    
+    // Start watching for position changes only after initial location is confirmed
+    if (navigator.geolocation && !watchIdRef.current) {
+        watchIdRef.current = navigator.geolocation.watchPosition(success, error, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0,
+        });
     }
 
     return () => {
-      if (watchIdRef.current) {
+      if (watchIdRef.current && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
     };
-  }, [isOnline, driver, updateDriverLocation]);
+  }, [isOnline, driverLocation, updateDriverLocation]);
 
 
   // Effect to calculate route to pickup point for new requests
@@ -212,6 +299,60 @@ const DriverPage: React.FC = () => {
   const handleConfirmEndTrip = () => {
     completeRide();
     setShowEndTripConfirmation(false);
+  };
+
+  const handleManualLocate = () => {
+    setIsManualLocating(true);
+    setLocationError(null);
+
+    const handleError = (error: GeolocationPositionError) => {
+        let message = "";
+        switch (error.code) {
+            case error.PERMISSION_DENIED:
+                message = "تم رفض إذن الوصول إلى الموقع. يرجى تفعيله من الإعدادات.";
+                setIsOnline(false); // If they manually try and fail due to permissions, they should go offline.
+                break;
+            case error.POSITION_UNAVAILABLE:
+                message = "تعذر تحديد موقعك. يرجى التأكد من أن إشارة GPS قوية.";
+                break;
+            case error.TIMEOUT:
+                message = "انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مرة أخرى.";
+                break;
+            default:
+                message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
+                break;
+        }
+        setLocationError(message);
+        setIsManualLocating(false);
+    };
+
+    if (!navigator.geolocation) {
+        setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
+        setIsManualLocating(false);
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        position => {
+            const { latitude, longitude } = position.coords;
+            if (isLocationInSyria(latitude, longitude)) {
+                setLocationError(null);
+                const newLocation = { lat: latitude, lng: longitude };
+                setDriverLocation(newLocation);
+                updateDriverLocation(newLocation);
+            } else {
+                 setLocationError("تم تحديد موقع خارج النطاق الجغرافي للخدمة.");
+                 console.warn(`Manual locate returned coordinates outside Syria: ${latitude}, ${longitude}`);
+            }
+            setIsManualLocating(false);
+        },
+        handleError,
+        {
+            enableHighAccuracy: true,
+            timeout: 20000,
+            maximumAge: 0,
+        }
+    );
   };
 
   const TripSummary: React.FC<{ ride: Ride }> = ({ ride }) => {
@@ -361,6 +502,22 @@ const DriverPage: React.FC = () => {
       <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-20">
         <h1 className="text-2xl font-bold text-primary">واجهة السائق</h1>
         <div className="flex items-center">
+            <button
+                onClick={handleManualLocate}
+                disabled={isManualLocating}
+                className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center text-2xl hover:bg-slate-600 disabled:opacity-50 disabled:cursor-wait mr-4"
+                aria-label="تحديد موقعي الحالي"
+                title="تحديد موقعي الحالي"
+            >
+                {isManualLocating ? (
+                  <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  '🎯'
+                )}
+            </button>
             <label className="relative inline-flex items-center cursor-pointer mr-5">
                 <input type="checkbox" checked={isOnline} onChange={() => setIsOnline(!isOnline)} className="sr-only peer" />
                 <div className="w-11 h-6 bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
