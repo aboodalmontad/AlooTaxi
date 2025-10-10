@@ -163,6 +163,29 @@ const CustomerPage: React.FC = () => {
     }
   }, [fetchUserLocation, startLocation]);
 
+  // --- START: Professional fix for stale location after turning off VPN ---
+  // This effect listens for when the user brings the app tab back into focus.
+  // When they do, it automatically re-fetches their location to ensure it's up-to-date.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Only re-fetch if there's no active ride, to avoid disrupting a trip.
+        if (!ride) {
+          fetchUserLocation();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Cleanup the event listener when the component unmounts to prevent memory leaks.
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [fetchUserLocation, ride]); // Re-run if these dependencies change.
+  // --- END: Professional fix ---
+
+
   // Effect to reset UI after a ride is completed
   useEffect(() => {
     // When the ride is completed and then cleared from the context, reset the UI for a new ride.
