@@ -21,12 +21,14 @@ const useDebounce = (value: string, delay: number) => {
   return debouncedValue;
 };
 
+type MapViewMode = 'free' | 'locked' | 'navigation';
+
 const CustomerPage: React.FC = () => {
   const { user, logout } = useAuth();
   const { ride, requestRide, cancelRide, getEstimatedFare, driverLiveLocation, liveTripData } = useRide();
   
   // Location and Route State
-  const [startLocation, setStartLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
+  const [startLocation, setStartLocation] = useState<{ lat: number; lng: number; name: string; heading: number | null } | null>(null);
   const [endLocation, setEndLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
   
@@ -38,7 +40,7 @@ const CustomerPage: React.FC = () => {
   const [locationError, setLocationError] = useState<string | null>(null);
   const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(true);
-  const [isMapViewLocked, setIsMapViewLocked] = useState(true); // New state for map view control
+  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('locked');
   
   // --- START: New state for Pin Drop feature ---
   const [pinDropMode, setPinDropMode] = useState<'start' | 'end' | null>(null);
@@ -75,7 +77,7 @@ const CustomerPage: React.FC = () => {
     const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
     const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
     
-    const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` };
+    const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}`, heading: null };
 
     if (!navigator.geolocation) {
         setStartLocation(fallbackLocation);
@@ -86,14 +88,14 @@ const CustomerPage: React.FC = () => {
     }
 
     const setFinalLocation = (position: GeolocationPosition, name: string) => {
-        const { latitude, longitude } = position.coords;
-        const newLocation = { lat: latitude, lng: longitude, name };
+        const { latitude, longitude, heading } = position.coords;
+        const newLocation = { lat: latitude, lng: longitude, name, heading };
         setStartLocation(newLocation);
         setStartQuery(name);
         setLocationError(null);
         setLocationWarning(null);
         setIsLocating(false);
-        setIsMapViewLocked(true);
+        setMapViewMode('locked');
     };
 
     const finalErrorHandler = (error: GeolocationPositionError) => {
@@ -114,11 +116,11 @@ const CustomerPage: React.FC = () => {
     navigator.geolocation.getCurrentPosition(
         (position) => {
             // Got a quick position, show it and then try to improve it.
-            const { latitude, longitude } = position.coords;
-            setStartLocation({ lat: latitude, lng: longitude, name: "موقع تقريبي..." });
+            const { latitude, longitude, heading } = position.coords;
+            setStartLocation({ lat: latitude, lng: longitude, name: "موقع تقريبي...", heading });
             setStartQuery("موقع تقريبي...");
             setLocationWarning("جاري تحسين دقة الموقع...");
-            setIsMapViewLocked(true);
+            setMapViewMode('locked');
 
             // Step 2: Now try for a high-accuracy position in the background.
             navigator.geolocation.getCurrentPosition(
@@ -161,7 +163,7 @@ const CustomerPage: React.FC = () => {
       setSelectedVehicle(null);
       setIsScheduling(false);
       setScheduledTime('');
-      setIsMapViewLocked(true); // Reset map lock
+      setMapViewMode('locked');
   }, []);
 
 
@@ -208,7 +210,7 @@ const CustomerPage: React.FC = () => {
   // Effect to re-lock map view when a new ride is requested
   useEffect(() => {
     if (ride && prevRideRef.current?.status !== ride.status) {
-        setIsMapViewLocked(true);
+        setMapViewMode('locked');
     }
   }, [ride]);
 
@@ -250,7 +252,7 @@ const CustomerPage: React.FC = () => {
                 const route = await getRoute(startLocation, endLocation);
                 setRouteInfo(route);
                 setCurrentStep('selectVehicle');
-                setIsMapViewLocked(true); // Re-lock view to show the new route
+                setMapViewMode('locked');
             } catch (error) {
                 if (error instanceof Error) {
                     setRouteError(error.message);
@@ -272,7 +274,7 @@ const CustomerPage: React.FC = () => {
         name: suggestion.name,
     };
     if (type === 'start') {
-        setStartLocation(newLocation);
+        setStartLocation({...newLocation, heading: null});
         setStartQuery(suggestion.name);
         setStartSuggestions([]);
         setLocationError(null);
@@ -297,6 +299,11 @@ const CustomerPage: React.FC = () => {
     setCurrentStep('confirmRequest');
   };
 
+  const handleUserInteraction = () => {
+    if (pinDropMode) return;
+    setMapViewMode('free');
+  };
+
   // --- START: New Handler for Pin Drop feature ---
   const handleConfirmPinDrop = () => {
       if (!mapCenter || !pinDropMode) return;
@@ -307,7 +314,7 @@ const CustomerPage: React.FC = () => {
       };
 
       if (pinDropMode === 'start') {
-          setStartLocation(newLocation);
+          setStartLocation({...newLocation, heading: null});
           setStartQuery(newLocation.name);
           setLocationError(null);
           setLocationWarning(null);
@@ -348,6 +355,7 @@ const CustomerPage: React.FC = () => {
 
   const mainPolyline = ride?.polyline || routeInfo?.polyline;
   const mapRoutes = mainPolyline ? [{ polyline: mainPolyline, color: '#3b82f6' }] : undefined;
+  const canNavigate = mapViewMode === 'navigation' && !pinDropMode && typeof startLocation?.heading === 'number';
 
   return (
     <div className="h-screen w-screen flex flex-col relative overflow-hidden">
@@ -382,17 +390,28 @@ const CustomerPage: React.FC = () => {
       )}
 
       <div className="flex-grow relative">
-        {/* Recenter button for customer map */}
-        {!isMapViewLocked && (
-            <button
-                onClick={() => setIsMapViewLocked(true)}
-                className="absolute top-24 right-4 w-12 h-12 bg-slate-800/80 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl hover:bg-slate-700 z-10 shadow-lg"
-                aria-label="إعادة ضبط عرض الخريطة"
-                title="إعادة ضبط عرض الخريطة"
+        <div className="absolute top-24 right-4 z-10 flex flex-col gap-2">
+            {mapViewMode !== 'locked' && (
+              <button
+                  onClick={() => setMapViewMode('locked')}
+                  className="w-12 h-12 bg-slate-800/80 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl hover:bg-slate-700 shadow-lg"
+                  aria-label="إعادة التمركز والتتبع"
+                  title="إعادة التمركز والتتبع"
+              >
+                  🖼️
+              </button>
+            )}
+             <button
+                onClick={() => setMapViewMode(mapViewMode === 'navigation' ? 'locked' : 'navigation')}
+                disabled={typeof startLocation?.heading !== 'number'}
+                className={`w-12 h-12 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl shadow-lg transition-colors ${mapViewMode === 'navigation' ? 'bg-primary text-white' : 'bg-slate-800/80 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label="تبديل وضع الملاحة"
+                title={typeof startLocation?.heading !== 'number' ? 'وضع الملاحة غير متاح (تحرك لعرض الاتجاه)' : 'تبديل وضع الملاحة'}
             >
-                🖼️
+                🧭
             </button>
-        )}
+        </div>
+
         <InteractiveMap 
           center={startLocation ? [startLocation.lat, startLocation.lng] : provinceCenter}
           userLocation={startLocation ?? undefined}
@@ -401,8 +420,12 @@ const CustomerPage: React.FC = () => {
           endLocation={ride?.status !== RideStatus.IDLE ? ride?.endLocation : endLocation ?? undefined}
           routes={mapRoutes}
           onCenterChange={setMapCenter}
-          disableAutoPanZoom={!isMapViewLocked || !!pinDropMode}
-          onUserInteraction={() => setIsMapViewLocked(false)}
+          disableAutoPanZoom={mapViewMode !== 'locked' || !!pinDropMode || canNavigate}
+          onUserInteraction={handleUserInteraction}
+          navigationMode={{
+              enabled: canNavigate,
+              bearing: startLocation?.heading ?? 0,
+          }}
         />
       </div>
 

@@ -8,12 +8,14 @@ import { getRoute, getHaversineDistance } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
 import { useDriverTracking } from '../hooks/useDriverTracking';
 
+type MapViewMode = 'free' | 'locked' | 'navigation';
+
 const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
   const { ride, acceptRide, rejectRide, completeRide, updateRideStatus, updateDriverLocation, liveTripData } = useRide();
   const [isOnline, setIsOnline] = useState(true);
   const [routeLegs, setRouteLegs] = useState<RouteStyle[]>([]);
-  const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number } | null>(null);
+  const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number, heading: number | null } | null>(null);
   const [pickupRouteInfo, setPickupRouteInfo] = useState<RouteInfo | null>(null);
   const [currentLegInfo, setCurrentLegInfo] = useState<RouteInfo | null>(null);
 
@@ -24,7 +26,7 @@ const DriverPage: React.FC = () => {
   const [showEndTripConfirmation, setShowEndTripConfirmation] = useState(false);
   const [isManualLocating, setIsManualLocating] = useState(false);
   const [isCurrentRideTooFar, setIsCurrentRideTooFar] = useState(false);
-  const [isMapLocked, setIsMapLocked] = useState(true); // Lock map to follow driver by default
+  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('locked');
   const routeCalculationTimeoutRef = useRef<number | null>(null);
   
   const driver = user as Driver;
@@ -39,7 +41,7 @@ const DriverPage: React.FC = () => {
 
     const province = driver?.province || SyrianProvinces.DAMASCUS;
     const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
-    const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
+    const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1], heading: null };
 
     if (!navigator.geolocation) {
         setDriverLocation(fallbackLocation);
@@ -51,8 +53,8 @@ const DriverPage: React.FC = () => {
     }
 
     const setFinalLocation = (position: GeolocationPosition) => {
-        const { latitude, longitude } = position.coords;
-        const newLocation = { lat: latitude, lng: longitude };
+        const { latitude, longitude, heading } = position.coords;
+        const newLocation = { lat: latitude, lng: longitude, heading };
         setDriverLocation(newLocation);
         updateDriverLocation(newLocation);
         setLocationError(null);
@@ -83,8 +85,8 @@ const DriverPage: React.FC = () => {
     // Step 1: Try for a quick, network-based location
     navigator.geolocation.getCurrentPosition(
         (position) => {
-            const { latitude, longitude } = position.coords;
-            const quickLocation = { lat: latitude, lng: longitude };
+            const { latitude, longitude, heading } = position.coords;
+            const quickLocation = { lat: latitude, lng: longitude, heading };
             setDriverLocation(quickLocation);
             updateDriverLocation(quickLocation);
             setLocationWarning("جاري تحسين دقة الموقع...");
@@ -139,14 +141,15 @@ const DriverPage: React.FC = () => {
   
   const handleManualLocate = () => {
     locateDriver(true);
-    setIsMapLocked(true); // Re-enable "follow me" mode
+    setMapViewMode('locked');
   };
 
   const handleLocationUpdate = useCallback((position: GeolocationPosition) => {
-      const { latitude, longitude } = position.coords;
+      const { latitude, longitude, heading } = position.coords;
       const newLocation = {
           lat: latitude,
           lng: longitude,
+          heading: heading,
       };
       setDriverLocation(newLocation);
       updateDriverLocation(newLocation);
@@ -491,6 +494,7 @@ const DriverPage: React.FC = () => {
 
   const userProvince = driver?.province || SyrianProvinces.DAMASCUS;
   const provinceCenter = PROVINCE_COORDS[userProvince] || DAMASCUS_COORDS;
+  const canNavigate = mapViewMode === 'navigation' && typeof driverLocation?.heading === 'number';
 
   return (
     <div className="h-screen w-screen flex flex-col relative">
@@ -556,7 +560,29 @@ const DriverPage: React.FC = () => {
       )}
       <CurrentTripInfo />
 
-      <div className="flex-grow">
+      <div className="flex-grow relative">
+          <div className="absolute top-24 right-4 z-10 flex flex-col gap-2">
+            {mapViewMode !== 'locked' && (
+              <button
+                  onClick={() => setMapViewMode('locked')}
+                  className="w-12 h-12 bg-slate-800/80 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl hover:bg-slate-700 shadow-lg"
+                  aria-label="إعادة التمركز والتتبع"
+                  title="إعادة التمركز والتتبع"
+              >
+                  🖼️
+              </button>
+            )}
+             <button
+                onClick={() => setMapViewMode(mapViewMode === 'navigation' ? 'locked' : 'navigation')}
+                disabled={typeof driverLocation?.heading !== 'number'}
+                className={`w-12 h-12 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl shadow-lg transition-colors ${mapViewMode === 'navigation' ? 'bg-primary text-white' : 'bg-slate-800/80 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label="تبديل وضع الملاحة"
+                title={typeof driverLocation?.heading !== 'number' ? 'وضع الملاحة غير متاح (تحرك لعرض الاتجاه)' : 'تبديل وضع الملاحة'}
+            >
+                🧭
+            </button>
+        </div>
+
         {driverLocation ? (
           <InteractiveMap 
               center={driverLocation ? [driverLocation.lat, driverLocation.lng] : provinceCenter}
@@ -564,8 +590,12 @@ const DriverPage: React.FC = () => {
               startLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.startLocation : undefined}
               endLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.endLocation : undefined}
               routes={routeLegs}
-              disableAutoPanZoom={!isMapLocked}
-              onUserInteraction={() => setIsMapLocked(false)}
+              disableAutoPanZoom={mapViewMode !== 'locked' || canNavigate}
+              onUserInteraction={() => setMapViewMode('free')}
+              navigationMode={{
+                  enabled: canNavigate,
+                  bearing: driverLocation?.heading ?? 0,
+              }}
           />
         ) : (
           <div className="h-full w-full flex items-center justify-center bg-slate-900">
