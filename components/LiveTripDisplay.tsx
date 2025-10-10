@@ -24,30 +24,42 @@ const LiveTripDisplay: React.FC<LiveTripDisplayProps> = ({
   timeElapsed,
   currentFare,
 }) => {
-  // A strong text shadow ensures readability over any map background.
-  const textShadowClass = "[text-shadow:0_3px_7px_rgba(0,0,0,0.9)]";
 
   return (
     <div className="p-4 text-white pointer-events-none">
-        <div className="grid grid-cols-3 text-center items-end">
+        {/*
+          Responsive Grid:
+          - Default: 1 column for mobile view (stacked vertically).
+          - md (medium screens) and up: 3 columns for desktop view.
+          - gap-y-4: Adds vertical spacing between items in the mobile view.
+          - md:items-end: Aligns items to the bottom in desktop view for a cleaner look.
+        */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-y-4 text-center md:items-end">
             <div className="px-2">
-                <p className={`text-base lg:text-lg text-slate-200 uppercase ${textShadowClass}`}>المسافة</p>
-                <p className={`text-5xl lg:text-7xl font-mono font-bold tracking-tight ${textShadowClass}`}>
+                <p className="text-lg md:text-base lg:text-lg text-slate-200 uppercase drop-shadow-lg">المسافة</p>
+                {/*
+                  Styling for the numbers:
+                  - text-red-500: Changed color to red as requested.
+                  - font-sans: Switched from mono to a more readable sans-serif font.
+                  - text-6xl...: Made the font huge and responsive for all screen sizes.
+                  - drop-shadow-xl: Added a crisp shadow for better readability against the map.
+                */}
+                <p className="text-red-500 text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
                     {distanceTraveled.toFixed(2)}
-                    <span className="text-xl lg:text-3xl ml-1 font-sans">كم</span>
+                    <span className="text-2xl lg:text-3xl ml-1">كم</span>
                 </p>
             </div>
             <div className="px-2">
-                <p className={`text-base lg:text-lg text-slate-200 uppercase ${textShadowClass}`}>الزمن</p>
-                <p className={`text-5xl lg:text-7xl font-mono font-bold tracking-tight ${textShadowClass}`}>
+                <p className="text-lg md:text-base lg:text-lg text-slate-200 uppercase drop-shadow-lg">الزمن</p>
+                <p className="text-red-500 text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
                     {formatTime(timeElapsed)}
                 </p>
             </div>
             <div className="px-2">
-                <p className={`text-base lg:text-lg text-slate-200 uppercase ${textShadowClass}`}>الأجرة</p>
-                <p className={`text-5xl lg:text-7xl font-mono font-bold tracking-tight ${textShadowClass}`}>
+                <p className="text-lg md:text-base lg:text-lg text-slate-200 uppercase drop-shadow-lg">الأجرة</p>
+                <p className="text-red-500 text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
                     {currentFare.toLocaleString('ar-SY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                    <span className="text-xl lg:text-3xl ml-1 font-sans">ل.س</span>
+                    <span className="text-2xl lg:text-3xl ml-1">ل.س</span>
                 </p>
             </div>
         </div>
