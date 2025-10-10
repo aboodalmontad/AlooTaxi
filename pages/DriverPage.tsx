@@ -30,7 +30,7 @@ const DriverPage: React.FC = () => {
   const driver = user as Driver;
   
   const locateDriver = useCallback((isManualRequest: boolean) => {
-    // Force a hard refresh by clearing the old location first.
+    // Step 1: Immediately clear the driver's location to force a UI reset.
     setDriverLocation(null);
     if (isManualRequest) {
         setIsManualLocating(true);
@@ -38,72 +38,76 @@ const DriverPage: React.FC = () => {
     setLocationError(null);
     setLocationWarning(null);
 
-    const province = driver?.province || SyrianProvinces.DAMASCUS;
-    const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
-    const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
+    // Step 2: Introduce a small delay to force a re-render before the API call,
+    // aiming to break any stubborn browser or platform-level location caching.
+    setTimeout(() => {
+        const province = driver?.province || SyrianProvinces.DAMASCUS;
+        const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
+        const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
 
-    if (!navigator.geolocation) {
-        const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
-        setDriverLocation(current => current ?? fallbackLocation);
-        updateDriverLocation(fallbackLocation);
-        setLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.");
-        if (isManualRequest) setIsManualLocating(false);
-        setIsOnline(false);
-        return;
-    }
-
-    const handlePosition = (position: GeolocationPosition) => {
-        const { latitude, longitude } = position.coords;
-        const newLocation = { lat: latitude, lng: longitude };
-        
-        setDriverLocation(newLocation);
-        updateDriverLocation(newLocation);
-        setLocationWarning(null);
-        setLocationError(null);
-        if (isManualRequest) setIsManualLocating(false);
-    };
-
-    const handleError = (error: GeolocationPositionError) => {
-        let message = "";
-        let forceOffline = false;
-        let isPermissionError = false;
-        switch (error.code) {
-            case error.PERMISSION_DENIED:
-                message = "تم رفض إذن الوصول إلى الموقع. يجب تفعيله للعمل كسائق.";
-                forceOffline = true;
-                isPermissionError = true;
-                break;
-            case error.POSITION_UNAVAILABLE:
-                message = "إشارة GPS ضعيفة أو غير متاحة. سيتم استخدام موقع افتراضي.";
-                break;
-            case error.TIMEOUT:
-                message = "انتهت مهلة طلب تحديد الموقع. تأكد من قوة إشارة GPS.";
-                break;
-            default:
-                message = "حدث خطأ غير متوقع.";
-                break;
+        if (!navigator.geolocation) {
+            const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
+            setDriverLocation(current => current ?? fallbackLocation);
+            updateDriverLocation(fallbackLocation);
+            setLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.");
+            if (isManualRequest) setIsManualLocating(false);
+            setIsOnline(false);
+            return;
         }
-        
-        const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
-        setDriverLocation(current => current ?? fallbackLocation);
-        updateDriverLocation(fallbackLocation);
 
-        let fullMessage = `${message}`;
-        if (isPermissionError) {
-            fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
-        }
-        setLocationError(fullMessage);
-        if (isManualRequest) setIsManualLocating(false);
-        if (forceOffline) setIsOnline(false);
-    };
+        const handlePosition = (position: GeolocationPosition) => {
+            const { latitude, longitude } = position.coords;
+            const newLocation = { lat: latitude, lng: longitude };
+            
+            setDriverLocation(newLocation);
+            updateDriverLocation(newLocation);
+            setLocationWarning(null);
+            setLocationError(null);
+            if (isManualRequest) setIsManualLocating(false);
+        };
 
-    const options: PositionOptions = {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0, // Force a fresh location, bypass any cache
-    };
+        const handleError = (error: GeolocationPositionError) => {
+            let message = "";
+            let forceOffline = false;
+            let isPermissionError = false;
+            switch (error.code) {
+                case error.PERMISSION_DENIED:
+                    message = "تم رفض إذن الوصول إلى الموقع. يجب تفعيله للعمل كسائق.";
+                    forceOffline = true;
+                    isPermissionError = true;
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    message = "إشارة GPS ضعيفة أو غير متاحة. سيتم استخدام موقع افتراضي.";
+                    break;
+                case error.TIMEOUT:
+                    message = "انتهت مهلة طلب تحديد الموقع. تأكد من قوة إشارة GPS.";
+                    break;
+                default:
+                    message = "حدث خطأ غير متوقع.";
+                    break;
+            }
+            
+            const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
+            setDriverLocation(current => current ?? fallbackLocation);
+            updateDriverLocation(fallbackLocation);
 
-    navigator.geolocation.getCurrentPosition(handlePosition, handleError, options);
+            let fullMessage = `${message}`;
+            if (isPermissionError) {
+                fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
+            }
+            setLocationError(fullMessage);
+            if (isManualRequest) setIsManualLocating(false);
+            if (forceOffline) setIsOnline(false);
+        };
+
+        const options: PositionOptions = {
+            enableHighAccuracy: true,
+            timeout: 15000,
+            maximumAge: 0, // Force a fresh location, bypass any cache
+        };
+
+        navigator.geolocation.getCurrentPosition(handlePosition, handleError, options);
+    }, 100);
   }, [driver, updateDriverLocation]);
   
   // Effect for initial location fetch

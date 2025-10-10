@@ -63,74 +63,82 @@ const CustomerPage: React.FC = () => {
   const prevRideRef = useRef<Ride | null>();
 
   const fetchUserLocation = useCallback((isManualRequest = false) => {
-      // Force a hard refresh by clearing the old location first.
-      setStartLocation(null); 
-      setIsLocating(true);
-      setStartQuery(isManualRequest ? "...جاري الحصول على موقع دقيق" : "...جاري تحديد الموقع");
-      setRouteInfo(null);
-      setRouteError(null);
-      setLocationError(null);
-      setLocationWarning(null);
+    // Step 1: Immediately clear all location-related state to force a UI reset.
+    setStartLocation(null);
+    setIsLocating(true);
+    setStartQuery("...جاري مسح الموقع القديم");
+    setRouteInfo(null);
+    setRouteError(null);
+    setLocationError(null);
+    setLocationWarning(null);
 
-      const province = user?.province || SyrianProvinces.DAMASCUS;
-      const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
-      const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
+    // Step 2: Introduce a small delay.
+    // This forces React to commit the state updates from Step 1 and re-render the component.
+    // This can help break stubborn caching behavior in some browsers/environments by ensuring
+    // the subsequent Geolocation API call is not seen as a rapid follow-up to a previous one.
+    setTimeout(() => {
+        setStartQuery(isManualRequest ? "...جاري الحصول على موقع دقيق" : "...جاري تحديد الموقع");
 
-      if (!navigator.geolocation) {
-          setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
-          setStartQuery(`وسط ${provinceName}`);
-          setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
-          setIsLocating(false);
-          return;
-      }
-      
-      const handlePosition = (position: GeolocationPosition) => {
-          const { latitude, longitude } = position.coords;
-          const newLocation = { lat: latitude, lng: longitude, name: "موقعي الحالي" };
-          setStartLocation(newLocation);
-          setStartQuery("موقعي الحالي");
-          setLocationWarning(null);
-          setLocationError(null);
-          setIsLocating(false);
-          setIsMapViewLocked(true); // Re-lock view on location fetch
-      };
+        const province = user?.province || SyrianProvinces.DAMASCUS;
+        const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
+        const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
 
-      const handleError = (error: GeolocationPositionError) => {
-          let message = "";
-          let isPermissionError = false;
-          switch (error.code) {
-              case error.PERMISSION_DENIED:
-                  message = "تم رفض إذن الوصول إلى الموقع.";
-                  isPermissionError = true;
-                  break;
-              case error.POSITION_UNAVAILABLE:
-                  message = "تعذر تحديد موقعك الحالي. قد تكون إشارة GPS ضعيفة أو خدمات الموقع متوقفة.";
-                  break;
-              case error.TIMEOUT:
-                  message = "انتهت مهلة طلب تحديد الموقع. يرجى التأكد من أن إشارة GPS قوية والمحاولة مرة أخرى.";
-                  break;
-              default:
-                  message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
-                  break;
-          }
+        if (!navigator.geolocation) {
+            setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
+            setStartQuery(`وسط ${provinceName}`);
+            setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
+            setIsLocating(false);
+            return;
+        }
 
-          setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
-          setStartQuery(`وسط ${provinceName}`);
-          let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
-          if (isPermissionError) {
-              fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
-          }
-          setLocationError(fullMessage);
-          setIsLocating(false);
-      };
-      
-      const options: PositionOptions = {
-        enableHighAccuracy: true,
-        timeout: 15000, // 15 seconds is a generous but firm timeout
-        maximumAge: 0,   // Force a fresh location, bypass any cache
-      };
+        const handlePosition = (position: GeolocationPosition) => {
+            const { latitude, longitude } = position.coords;
+            const newLocation = { lat: latitude, lng: longitude, name: "موقعي الحالي" };
+            setStartLocation(newLocation);
+            setStartQuery("موقعي الحالي");
+            setLocationWarning(null);
+            setLocationError(null);
+            setIsLocating(false);
+            setIsMapViewLocked(true); // Re-lock view on location fetch
+        };
 
-      navigator.geolocation.getCurrentPosition(handlePosition, handleError, options);
+        const handleError = (error: GeolocationPositionError) => {
+            let message = "";
+            let isPermissionError = false;
+            switch (error.code) {
+                case error.PERMISSION_DENIED:
+                    message = "تم رفض إذن الوصول إلى الموقع.";
+                    isPermissionError = true;
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    message = "تعذر تحديد موقعك الحالي. قد تكون إشارة GPS ضعيفة أو خدمات الموقع متوقفة.";
+                    break;
+                case error.TIMEOUT:
+                    message = "انتهت مهلة طلب تحديد الموقع. يرجى التأكد من أن إشارة GPS قوية والمحاولة مرة أخرى.";
+                    break;
+                default:
+                    message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
+                    break;
+            }
+
+            setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
+            setStartQuery(`وسط ${provinceName}`);
+            let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
+            if (isPermissionError) {
+                fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
+            }
+            setLocationError(fullMessage);
+            setIsLocating(false);
+        };
+        
+        const options: PositionOptions = {
+          enableHighAccuracy: true,
+          timeout: 15000, // 15 seconds is a generous but firm timeout
+          maximumAge: 0,   // Force a fresh location, bypass any cache
+        };
+
+        navigator.geolocation.getCurrentPosition(handlePosition, handleError, options);
+    }, 100);
   }, [user]);
 
   const resetJourney = useCallback(() => {
