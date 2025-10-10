@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 
 // Configuration for the Geolocation API
 const TRACKING_OPTIONS: PositionOptions = {
@@ -21,54 +21,77 @@ interface TrackingCallbacks {
 /**
  * A custom hook to manage real-time geolocation tracking for drivers.
  * It encapsulates the logic for starting, stopping, and handling updates from `watchPosition`.
- * Includes reliability improvements like a longer timeout and accuracy filtering.
+ * Includes reliability improvements like a longer timeout, accuracy filtering, and an auto-retry mechanism.
  * @param isTracking - A boolean to enable or disable tracking.
  * @param callbacks - Memoized callback functions for success and error events.
  */
 export const useDriverTracking = (isTracking: boolean, callbacks: TrackingCallbacks) => {
     const watchIdRef = useRef<number | null>(null);
-    
-    // Destructure callbacks to ensure the effect hook's dependency array is stable.
+    const retryTimeoutRef = useRef<number | null>(null);
     const { onSuccess, onError } = callbacks;
 
-    useEffect(() => {
-        // Stop tracking if the `isTracking` flag is false.
-        if (!isTracking) {
-            if (watchIdRef.current && navigator.geolocation) {
-                navigator.geolocation.clearWatch(watchIdRef.current);
-                watchIdRef.current = null;
-            }
+    const clearWatch = useCallback(() => {
+        if (watchIdRef.current !== null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(watchIdRef.current);
+            watchIdRef.current = null;
+        }
+    }, []);
+
+    const clearRetryTimeout = useCallback(() => {
+        if (retryTimeoutRef.current !== null) {
+            clearTimeout(retryTimeoutRef.current);
+            retryTimeoutRef.current = null;
+        }
+    }, []);
+
+    const startWatch = useCallback(() => {
+        clearWatch();
+        clearRetryTimeout();
+
+        if (!navigator.geolocation) {
+            console.error("[Tracking] Geolocation API is not supported by this browser.");
+            // The component using this hook should ideally handle this case.
             return;
         }
 
-        // Start tracking if geolocation is available and not already watching.
-        if (navigator.geolocation && watchIdRef.current === null) {
-            watchIdRef.current = navigator.geolocation.watchPosition(
-                (position) => {
-                    // --- ACCURACY FILTER ---
-                    // Only accept position updates that are reasonably accurate.
-                    if (position.coords.accuracy > MIN_ACCURACY_METERS) {
-                        console.warn(
-                            `[Tracking] Ignored inaccurate position update. Accuracy: ${position.coords.accuracy.toFixed(1)}m (Threshold: ${MIN_ACCURACY_METERS}m)`
-                        );
-                        return;
-                    }
-                    onSuccess(position);
-                },
-                (error) => {
-                    console.error("[Tracking] Geolocation watch error:", error);
-                    onError(error);
-                },
-                TRACKING_OPTIONS
-            );
+        watchIdRef.current = navigator.geolocation.watchPosition(
+            (position) => {
+                if (position.coords.accuracy > MIN_ACCURACY_METERS) {
+                    console.warn(
+                        `[Tracking] Ignored inaccurate position update. Accuracy: ${position.coords.accuracy.toFixed(1)}m (Threshold: ${MIN_ACCURACY_METERS}m)`
+                    );
+                    return;
+                }
+                onSuccess(position);
+            },
+            (error) => {
+                console.error(`[Tracking] Geolocation watch error - Code: ${error.code}, Message: ${error.message}`);
+                onError(error);
+
+                if (error.code === error.PERMISSION_DENIED) {
+                    clearWatch();
+                    return;
+                }
+                
+                // For transient errors, attempt to restart the watch after a delay.
+                clearWatch();
+                retryTimeoutRef.current = window.setTimeout(startWatch, 5000); // Retry after 5 seconds.
+            },
+            TRACKING_OPTIONS
+        );
+    }, [onSuccess, onError, clearWatch, clearRetryTimeout]);
+
+    useEffect(() => {
+        if (isTracking) {
+            startWatch();
+        } else {
+            clearWatch();
+            clearRetryTimeout();
         }
 
-        // Cleanup function to clear the watch when the component unmounts or `isTracking` becomes false.
         return () => {
-            if (watchIdRef.current && navigator.geolocation) {
-                navigator.geolocation.clearWatch(watchIdRef.current);
-                watchIdRef.current = null;
-            }
+            clearWatch();
+            clearRetryTimeout();
         };
-    }, [isTracking, onSuccess, onError]);
+    }, [isTracking, startWatch, clearWatch, clearRetryTimeout]);
 };

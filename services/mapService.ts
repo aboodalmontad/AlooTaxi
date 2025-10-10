@@ -225,6 +225,7 @@ export const searchLocations = async (query: string, focusPoint?: { lat: number,
     
     const params = new URLSearchParams({
         text: query,
+        lang: 'ar',
     });
 
     if (focusPoint) {

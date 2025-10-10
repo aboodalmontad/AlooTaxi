@@ -66,10 +66,14 @@ const NavigationUI: React.FC<NavigationUIProps> = ({ routeInfo, currentLocation,
     useEffect(() => {
         if (!currentLocation || !routeInfo?.polyline || steps.length === 0) return;
 
-        const nextStepIndex = currentStepIndex + 1;
-        if (nextStepIndex >= steps.length) return;
-        
-        const nextManeuverWayPointIndex = steps[nextStepIndex].way_points[0];
+        // Ensure we don't go out of bounds. The last step has no "next" step.
+        if (currentStepIndex >= steps.length - 1) {
+            setDistanceToNextManeuver(0);
+            return;
+        }
+
+        const nextStep = steps[currentStepIndex + 1];
+        const nextManeuverWayPointIndex = nextStep.way_points[0];
         const nextManeuverCoordsArray = routeInfo.polyline[nextManeuverWayPointIndex];
 
         if (!nextManeuverCoordsArray) return;
@@ -79,8 +83,15 @@ const NavigationUI: React.FC<NavigationUIProps> = ({ routeInfo, currentLocation,
         const distance = getHaversineDistance(currentLocation, nextManeuverCoords) * 1000; // in meters
         setDistanceToNextManeuver(distance);
 
-        // Advance to the next step if user is close to the maneuver point
-        if (distance < 25) {
+        // Advance to the next step if user is very close to the current maneuver point
+        const currentManeuverWayPointIndex = steps[currentStepIndex].way_points[0];
+        const currentManeuverCoordsArray = routeInfo.polyline[currentManeuverWayPointIndex];
+        if(!currentManeuverCoordsArray) return;
+
+        const currentManeuverCoords = {lat: currentManeuverCoordsArray[0], lng: currentManeuverCoordsArray[1]}
+        const distanceToCurrentManeuver = getHaversineDistance(currentLocation, currentManeuverCoords) * 1000;
+        
+        if (distanceToCurrentManeuver < 25 && currentStepIndex > 0) { // Don't auto-advance from the very first step
             setCurrentStepIndex(i => i + 1);
         }
 
@@ -117,10 +128,17 @@ const NavigationUI: React.FC<NavigationUIProps> = ({ routeInfo, currentLocation,
     };
 
     return (
-        <div className="absolute inset-0 z-10 pointer-events-none text-white flex flex-col justify-between p-4">
-            {/* Top Bar (Next Turn + Current Street) */}
+        <div className="absolute inset-0 z-10 pointer-events-none text-white flex flex-col justify-between p-4 animate-fade-in">
+            {/* Top elements container */}
             <div className="space-y-2">
-                {/* Next Turn Instruction */}
+                {/* Current Street Name - Top Center */}
+                <div className="w-full flex justify-center">
+                    <div className="bg-slate-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg text-center px-6">
+                        <p className="text-2xl font-bold">{currentStep?.name || "جاري حساب المسار..."}</p>
+                    </div>
+                </div>
+
+                {/* Next Turn Instruction - Top Left */}
                 {nextStep && (
                     <div className="bg-slate-900/80 backdrop-blur-sm p-3 rounded-xl shadow-lg flex items-center gap-4 max-w-sm">
                         <div className="flex-shrink-0 text-primary-light">
@@ -132,10 +150,6 @@ const NavigationUI: React.FC<NavigationUIProps> = ({ routeInfo, currentLocation,
                         </div>
                     </div>
                 )}
-                {/* Current Street Name */}
-                <div className="bg-slate-900/80 backdrop-blur-sm p-3 rounded-xl shadow-lg w-full text-center">
-                    <p className="text-2xl font-bold">{currentStep?.name || "جاري حساب المسار..."}</p>
-                </div>
             </div>
 
             {/* Bottom Info Bar */}
