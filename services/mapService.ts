@@ -69,7 +69,7 @@ export const getRoute = async (
     };
   }
 
-  const MAX_REASONABLE_DISTANCE_KM = 1500; // A safe buffer for a country-wide app.
+  const MAX_REASONABLE_DISTANCE_KM = 1000; // A safe buffer for a country-wide app. Syria is ~800km wide.
   if (haversineDistance > MAX_REASONABLE_DISTANCE_KM) {
     const errorMsg = `المسافة بين النقطتين (${Math.round(haversineDistance)} كم) كبيرة جداً. يرجى التحقق من المواقع المحددة.`;
     console.error(`Route calculation aborted pre-flight due to excessive distance: ${haversineDistance.toFixed(2)}km`, { start, end });

@@ -68,6 +68,12 @@ const CustomerPage: React.FC = () => {
 
   const prevRideRef = useRef<Ride | null>();
 
+  const userProvince = user?.province || SyrianProvinces.DAMASCUS;
+  const provinceCenter = useMemo(() => ({
+      lat: PROVINCE_COORDS[userProvince][0],
+      lng: PROVINCE_COORDS[userProvince][1]
+  }), [userProvince]);
+
   const fetchUserLocation = useCallback((isManualRequest = false) => {
     setStartLocation(null);
     setIsLocating(true);
@@ -320,6 +326,22 @@ const CustomerPage: React.FC = () => {
         lng: suggestion.coordinates.lng,
         name: suggestion.name,
     };
+
+    // Validation: Check if the selected location is too far.
+    const originPoint = type === 'start' ? (endLocation || provinceCenter) : (startLocation || provinceCenter);
+    
+    if (originPoint && typeof originPoint.lat === 'number' && typeof originPoint.lng === 'number') {
+        const distance = getHaversineDistance(originPoint, newLocation);
+        const MAX_ALLOWED_DISTANCE_KM = 1000; // Consistent with mapService
+
+        if (distance > MAX_ALLOWED_DISTANCE_KM) {
+            setRouteError(`الموقع المحدد بعيد جدًا (${Math.round(distance)} كم). يرجى اختيار موقع أقرب داخل البلد.`);
+            setActiveInput(null); // Close suggestions
+            return;
+        }
+    }
+
+
     if (type === 'start') {
         setStartLocation({...newLocation, heading: null});
         setStartQuery(suggestion.name);
@@ -360,6 +382,20 @@ const CustomerPage: React.FC = () => {
           name: `موقع محدد (${mapCenter.lat.toFixed(4)}, ${mapCenter.lng.toFixed(4)})`,
       };
 
+      // Validation: Check if the selected location is too far.
+      const originPoint = pinDropMode === 'start' ? (endLocation || provinceCenter) : (startLocation || provinceCenter);
+      
+      if (originPoint && typeof originPoint.lat === 'number' && typeof originPoint.lng === 'number') {
+        const distance = getHaversineDistance(originPoint, newLocation);
+        const MAX_ALLOWED_DISTANCE_KM = 1000; // Consistent with mapService
+
+        if (distance > MAX_ALLOWED_DISTANCE_KM) {
+            setRouteError(`الموقع المحدد بعيد جدًا (${Math.round(distance)} كم). يرجى اختيار موقع أقرب داخل البلد.`);
+            setPinDropMode(null); // Exit pin drop mode
+            return;
+        }
+      }
+
       if (pinDropMode === 'start') {
           setStartLocation({...newLocation, heading: null});
           setStartQuery(newLocation.name);
@@ -397,8 +433,7 @@ const CustomerPage: React.FC = () => {
     );
   }
 
-  const userProvince = user?.province || SyrianProvinces.DAMASCUS;
-  const provinceCenter = PROVINCE_COORDS[userProvince] || DAMASCUS_COORDS;
+  const mapCenterCoords = startLocation ? [startLocation.lat, startLocation.lng] : [provinceCenter.lat, provinceCenter.lng] as [number, number];
 
   const canNavigate = mapViewMode === 'navigation' && !pinDropMode && typeof startLocation?.heading === 'number';
 
@@ -478,7 +513,7 @@ const CustomerPage: React.FC = () => {
         </div>
 
         <InteractiveMap 
-          center={startLocation ? [startLocation.lat, startLocation.lng] : provinceCenter}
+          center={mapCenterCoords}
           userLocation={startLocation ?? undefined}
           driverLocation={driverLiveLocation ?? undefined}
           startLocation={ride?.status !== RideStatus.IDLE ? ride?.startLocation : startLocation ?? undefined}

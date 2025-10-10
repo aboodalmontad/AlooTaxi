@@ -31,6 +31,7 @@ const DriverPage: React.FC = () => {
   const [isCurrentRideTooFar, setIsCurrentRideTooFar] = useState(false);
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('locked');
   const routeCalculationTimeoutRef = useRef<number | null>(null);
+  const notifiedRideIdRef = useRef<string | null>(null);
   
   const driver = user as Driver;
   
@@ -329,6 +330,52 @@ const DriverPage: React.FC = () => {
     
   }, [ride?.status, driverLocation, isOnline, ride?.startLocation, ride?.endLocation, routeError]);
 
+  // Effect to play a sound and vibrate on new ride request
+  useEffect(() => {
+    if (
+      ride &&
+      ride.status === RideStatus.REQUESTED &&
+      ride.id !== notifiedRideIdRef.current &&
+      isOnline &&
+      !isCurrentRideTooFar
+    ) {
+      const playSound = () => {
+        try {
+          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const oscillator = audioContext.createOscillator();
+          const gainNode = audioContext.createGain();
+
+          oscillator.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+
+          oscillator.type = 'sine';
+          oscillator.frequency.setValueAtTime(660, audioContext.currentTime);
+          // FIX: Corrected typo from `audio-context.currentTime` to `audioContext.currentTime`
+          gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+          
+          oscillator.start();
+          gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.8);
+          oscillator.stop(audioContext.currentTime + 0.8);
+        } catch (error) {
+          console.error("Could not play notification sound:", error);
+        }
+      };
+
+      playSound();
+      
+      if ('vibrate' in navigator) {
+        navigator.vibrate([200, 100, 200]);
+      }
+
+      notifiedRideIdRef.current = ride.id;
+    }
+
+    if (!ride) {
+      notifiedRideIdRef.current = null;
+    }
+  }, [ride, isOnline, isCurrentRideTooFar]);
+
+
   useEffect(() => {
     if (ride?.status === RideStatus.COMPLETED) {
         setLastCompletedRide(ride);
@@ -382,41 +429,56 @@ const DriverPage: React.FC = () => {
       
       if(!ride || ride.status !== RideStatus.REQUESTED || !isOnline) return null;
 
-      const driverShare = Math.round(ride.estimatedFare * 0.80); // Assume 80% share
+      const driverShare = Math.round(ride.estimatedFare * 0.80);
       const vehicleName = VEHICLE_TYPES.find(v => v.id === ride.vehicleType)?.ar || 'غير محدد';
 
       return (
-          <div className="absolute top-20 right-4 left-4 bg-slate-800/95 backdrop-blur-sm border-2 border-secondary-DEFAULT p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
-              <h3 className="text-xl font-bold text-secondary-light mb-2">طلب رحلة جديد!</h3>
-              
-              {pickupRouteInfo ? (
-                <div className="my-2 p-2 bg-slate-700/50 rounded-md">
-                    <p className="font-bold text-teal-300">أنت على بعد {pickupRouteInfo.distance} كم من نقطة الالتقاط.</p>
-                    <p className="text-sm text-slate-300">الوقت المقدر للوصول: {Math.round(pickupRouteInfo.duration)} دقيقة.</p>
-                </div>
-              ) : (
-                <p className="my-2 text-slate-400 animate-pulse">...جاري حساب المسافة إلى الزبون</p>
-              )}
-              
-              <p>من: {ride.startLocation.name}</p>
-              <p>إلى: {ride.endLocation.name}</p>
-              <p className="mt-2 text-sm">نوع المركبة: {vehicleName}</p>
-              <p className="mt-1">مسافة الرحلة: {ride.distance} كم - الزمن التقريبي: {Math.round(ride.duration)} دقيقة</p>
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 transition-opacity duration-300 animate-fade-in">
+              <div className="bg-slate-800 rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 border-2 border-primary-dark transform animate-fade-in-up">
+                  <h3 className="text-3xl font-bold text-primary text-center mb-4">طلب رحلة جديد!</h3>
+                  
+                  {pickupRouteInfo ? (
+                    <div className="my-3 p-3 bg-slate-700/50 rounded-lg text-center">
+                        <p className="font-bold text-xl text-teal-300">{pickupRouteInfo.distance} كم منك</p>
+                        <p className="text-slate-300">~{Math.round(pickupRouteInfo.duration)} دقيقة للوصول للزبون</p>
+                    </div>
+                  ) : (
+                    <p className="my-3 text-center text-slate-400 animate-pulse">...جاري حساب المسافة إلى الزبون</p>
+                  )}
+                  
+                  <div className="space-y-2 text-right text-lg my-4">
+                    <p><span className="font-semibold text-slate-400">من:</span> {ride.startLocation.name}</p>
+                    <p><span className="font-semibold text-slate-400">إلى:</span> {ride.endLocation.name}</p>
+                  </div>
 
-               {pickupRouteInfo && (
-                  <div className="mt-3 border-t border-slate-600 pt-3">
-                      <h4 className="font-semibold text-base">ملخص الرحلة الكاملة (من موقعك الحالي)</h4>
-                      <div className="flex justify-around text-sm mt-1">
-                          <p>المسافة الإجمالية: <span className="font-bold text-lg">{(pickupRouteInfo.distance + ride.distance).toFixed(1)} كم</span></p>
-                          <p>الوقت الإجمالي: <span className="font-bold text-lg">~{Math.round(pickupRouteInfo.duration + ride.duration)} دقيقة</span></p>
+                  <div className="flex justify-between items-center bg-slate-700/50 p-3 rounded-lg text-center">
+                      <div>
+                          <p className="text-sm text-slate-400">مسافة الرحلة</p>
+                          <p className="font-bold text-xl">{ride.distance} كم</p>
+                      </div>
+                       <div>
+                          <p className="text-sm text-slate-400">نوع المركبة</p>
+                          <p className="font-bold text-xl">{vehicleName}</p>
+                      </div>
+                      <div>
+                          <p className="text-sm text-slate-400">زمن الرحلة</p>
+                          <p className="font-bold text-xl">~{Math.round(ride.duration)} د</p>
                       </div>
                   </div>
-              )}
 
-              <p className="text-lg font-bold mt-2">أرباحك المتوقعة: {driverShare.toLocaleString('ar-SY', {style: 'currency', currency: 'SYP'})}</p>
-              <div className="flex justify-around mt-4">
-                  <button onClick={handleAcceptRide} className="px-8 py-2 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transform hover:scale-105">قبول</button>
-                  <button onClick={handleRejectRide} className="px-8 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transform hover:scale-105">رفض</button>
+                  <div className="mt-4 text-center">
+                    <p className="text-slate-300">أرباحك المتوقعة من هذه الرحلة</p>
+                    <p className="text-3xl font-bold text-green-400 my-1">{driverShare.toLocaleString('ar-SY', {style: 'currency', currency: 'SYP'})}</p>
+                  </div>
+
+                  <div className="flex justify-around mt-6 gap-4">
+                      <button onClick={handleAcceptRide} className="flex-1 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transform hover:scale-105 text-xl">
+                          قبول
+                      </button>
+                      <button onClick={handleRejectRide} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transform hover:scale-105 text-xl">
+                          رفض
+                      </button>
+                  </div>
               </div>
           </div>
       );

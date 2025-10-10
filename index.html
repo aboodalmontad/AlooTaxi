@@ -64,6 +64,21 @@
             box-shadow: 0 0 5px rgba(0,0,0,0.5);
             animation: pulse 2s infinite;
         }
+        
+        /* General purpose animations */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        .animate-fade-in-down { animation: fadeInDown 0.3s ease-out forwards; }
+        .animate-fade-in-up { animation: fadeInUp 0.3s ease-out forwards; }
+
         /* New styles for advanced navigation view */
         .navigation-view .leaflet-map-pane {
             transition: transform 0.5s ease-out;

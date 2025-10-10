@@ -26,6 +26,8 @@ interface RideContextType {
 
 const RideContext = createContext<RideContextType | undefined>(undefined);
 
+const RIDE_STORAGE_KEY = 'allo-taxi-current-ride';
+
 const initialPricing: PricingSettings = {
     [VehicleType.NORMAL_CAR]: { baseFare: 3000, perKm: 500, perMinute: 100 },
     [VehicleType.AC_CAR]: { baseFare: 4000, perKm: 600, perMinute: 125 },
@@ -36,7 +38,15 @@ const initialPricing: PricingSettings = {
 };
 
 export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [ride, setRide] = useState<Ride | null>(null);
+  const [ride, setRide] = useState<Ride | null>(() => {
+    try {
+        const item = window.localStorage.getItem(RIDE_STORAGE_KEY);
+        return item ? JSON.parse(item) : null;
+    } catch (error) {
+        console.error('Error reading ride from localStorage', error);
+        return null;
+    }
+  });
   const [driverLiveLocation, setDriverLiveLocation] = useState<{ lat: number; lng: number; } | null>(null);
   const [pricing, setPricing] = useState<PricingSettings>(initialPricing);
   const { user } = useAuth();
@@ -44,6 +54,41 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const tripIntervalRef = useRef<number | null>(null);
   const tripStartTimeRef = useRef<Date | null>(null);
+
+  const setRideAndSync = useCallback((value: Ride | null | ((prevRide: Ride | null) => Ride | null)) => {
+    const updater = (prevRide: Ride | null): Ride | null => {
+        const newRide = typeof value === 'function' ? value(prevRide) : value;
+        try {
+            if (newRide) {
+                window.localStorage.setItem(RIDE_STORAGE_KEY, JSON.stringify(newRide));
+            } else {
+                window.localStorage.removeItem(RIDE_STORAGE_KEY);
+            }
+        } catch (error) {
+            console.error('Error writing ride to localStorage', error);
+        }
+        return newRide;
+    };
+    setRide(updater);
+  }, []);
+
+  useEffect(() => {
+    const syncRide = (event: StorageEvent) => {
+        if (event.key === RIDE_STORAGE_KEY) {
+            try {
+                const item = event.newValue;
+                setRide(item ? JSON.parse(item) : null);
+            } catch (error) {
+                console.error('Error syncing ride from localStorage', error);
+            }
+        }
+    };
+    window.addEventListener('storage', syncRide);
+    return () => {
+        window.removeEventListener('storage', syncRide);
+    };
+  }, []);
+
 
   const getEstimatedFare = useCallback((vehicleType: VehicleType, distance: number, duration: number) => {
     const vehiclePricing = pricing[vehicleType];
@@ -80,22 +125,22 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       isScheduled: schedule?.isScheduled || false,
       scheduledTime: schedule?.time
     };
-    setRide(newRide);
+    setRideAndSync(newRide);
     setLiveTripData(null); // Clear any previous live data
-  }, [user, getEstimatedFare]);
+  }, [user, getEstimatedFare, setRideAndSync]);
 
   const acceptRide = useCallback((driver: Driver) => {
-    setRide(prevRide => {
+    setRideAndSync(prevRide => {
       if (prevRide && prevRide.status === RideStatus.REQUESTED) {
         // Streamline the flow: Accepting a ride immediately means the driver is picking up.
         return { ...prevRide, status: RideStatus.PICKING_UP, driverId: driver.id };
       }
       return prevRide;
     });
-  }, []);
+  }, [setRideAndSync]);
 
   const rejectRide = useCallback(() => {
-    setRide(prevRide => {
+    setRideAndSync(prevRide => {
       // For the mock, this simply dismisses the ride for the driver.
       // In a real system, it would go back to a queue.
       if (prevRide && prevRide.status === RideStatus.REQUESTED) {
@@ -103,14 +148,14 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
       return prevRide;
     });
-  }, []);
+  }, [setRideAndSync]);
   
   const updateDriverLocation = useCallback((location: { lat: number; lng: number }) => {
     setDriverLiveLocation(location);
   }, []);
 
   const updateRideStatus = (newStatus: RideStatus) => {
-    setRide(prev => {
+    setRideAndSync(prev => {
         if (!prev) return null;
         if (prev.status === RideStatus.CANCELLED || prev.status === RideStatus.COMPLETED) {
             return prev;
@@ -120,31 +165,35 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const cancelRide = () => {
-    if(ride) {
-        setRide({ ...ride, status: RideStatus.CANCELLED });
+    setRideAndSync(prev => {
+        if (!prev) return null;
         setDriverLiveLocation(null);
         setTimeout(() => {
-            setRide(null);
+            setRideAndSync(null);
             setLiveTripData(null);
         }, 3000);
-    }
+        return { ...prev, status: RideStatus.CANCELLED };
+    });
   };
 
   const completeRide = () => {
-    if (ride) {
-      const finalFare = liveTripData?.currentFare ?? getEstimatedFare(ride.vehicleType, ride.distance, ride.duration + Math.random() * 5); 
-      setRide({ 
-          ...ride, 
-          status: RideStatus.COMPLETED, 
-          finalFare, 
-          completedAt: new Date().toISOString() 
-      });
-      setDriverLiveLocation(null);
-      setTimeout(() => {
-        setRide(null);
-        setLiveTripData(null);
-      }, 5000);
-    }
+    setRideAndSync(prevRide => {
+        if (!prevRide) return null;
+
+        const finalFare = liveTripData?.currentFare ?? getEstimatedFare(prevRide.vehicleType, prevRide.distance, prevRide.duration + Math.random() * 5);
+        setDriverLiveLocation(null);
+        setTimeout(() => {
+            setRideAndSync(null);
+            setLiveTripData(null);
+        }, 5000);
+        
+        return {
+            ...prevRide,
+            status: RideStatus.COMPLETED,
+            finalFare,
+            completedAt: new Date().toISOString()
+        };
+    });
   };
   
   // Effect to manage the live trip timer
