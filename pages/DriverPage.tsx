@@ -43,8 +43,9 @@ const DriverPage: React.FC = () => {
     const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
 
     if (!navigator.geolocation) {
-        setDriverLocation(current => current ?? { lat: provinceCoords[0], lng: provinceCoords[1] });
-        updateDriverLocation({ lat: provinceCoords[0], lng: provinceCoords[1] });
+        const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
+        setDriverLocation(current => current ?? fallbackLocation);
+        updateDriverLocation(fallbackLocation);
         setLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.");
         if (isManualRequest) setIsManualLocating(false);
         setIsOnline(false);
@@ -73,10 +74,10 @@ const DriverPage: React.FC = () => {
                 isPermissionError = true;
                 break;
             case error.POSITION_UNAVAILABLE:
-                message = "إشارة GPS ضعيفة أو غير متاحة.";
+                message = "إشارة GPS ضعيفة أو غير متاحة. سيتم استخدام موقع افتراضي.";
                 break;
             case error.TIMEOUT:
-                message = "انتهت مهلة طلب تحديد الموقع.";
+                message = "انتهت مهلة طلب تحديد الموقع. تأكد من قوة إشارة GPS.";
                 break;
             default:
                 message = "حدث خطأ غير متوقع.";
@@ -96,18 +97,13 @@ const DriverPage: React.FC = () => {
         if (forceOffline) setIsOnline(false);
     };
 
-    // Two-phase location fetching
-    navigator.geolocation.getCurrentPosition(
-      handlePosition,
-      () => {
-          navigator.geolocation.getCurrentPosition(handlePosition, handleError, {
-              enableHighAccuracy: true,
-              timeout: 20000,
-              maximumAge: 0,
-          });
-      },
-      { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
-    );
+    const options: PositionOptions = {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0, // Force a fresh location, bypass any cache
+    };
+
+    navigator.geolocation.getCurrentPosition(handlePosition, handleError, options);
   }, [driver, updateDriverLocation]);
   
   // Effect for initial location fetch

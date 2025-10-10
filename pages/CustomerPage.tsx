@@ -62,11 +62,11 @@ const CustomerPage: React.FC = () => {
 
   const prevRideRef = useRef<Ride | null>();
 
-  const fetchUserLocation = useCallback(() => {
+  const fetchUserLocation = useCallback((isManualRequest = false) => {
       // Force a hard refresh by clearing the old location first.
       setStartLocation(null); 
       setIsLocating(true);
-      setStartQuery("...جاري تحديد الموقع");
+      setStartQuery(isManualRequest ? "...جاري الحصول على موقع دقيق" : "...جاري تحديد الموقع");
       setRouteInfo(null);
       setRouteError(null);
       setLocationError(null);
@@ -104,10 +104,10 @@ const CustomerPage: React.FC = () => {
                   isPermissionError = true;
                   break;
               case error.POSITION_UNAVAILABLE:
-                  message = "تعذر تحديد موقعك الحالي. يرجى التأكد من أن إشارة GPS قوية.";
+                  message = "تعذر تحديد موقعك الحالي. قد تكون إشارة GPS ضعيفة أو خدمات الموقع متوقفة.";
                   break;
               case error.TIMEOUT:
-                  message = "انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مرة أخرى.";
+                  message = "انتهت مهلة طلب تحديد الموقع. يرجى التأكد من أن إشارة GPS قوية والمحاولة مرة أخرى.";
                   break;
               default:
                   message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
@@ -123,25 +123,14 @@ const CustomerPage: React.FC = () => {
           setLocationError(fullMessage);
           setIsLocating(false);
       };
+      
+      const options: PositionOptions = {
+        enableHighAccuracy: true,
+        timeout: 15000, // 15 seconds is a generous but firm timeout
+        maximumAge: 0,   // Force a fresh location, bypass any cache
+      };
 
-      // Two-phase location fetching for better UX
-      // 1. Quick, low-accuracy attempt
-      navigator.geolocation.getCurrentPosition(
-          handlePosition,
-          () => {
-              // If low accuracy fails, immediately try high accuracy
-              navigator.geolocation.getCurrentPosition(handlePosition, handleError, {
-                  enableHighAccuracy: true,
-                  timeout: 20000,
-                  maximumAge: 0,
-              });
-          },
-          {
-              enableHighAccuracy: false,
-              timeout: 5000, // 5 seconds for a quick response
-              maximumAge: 60000,
-          }
-      );
+      navigator.geolocation.getCurrentPosition(handlePosition, handleError, options);
   }, [user]);
 
   const resetJourney = useCallback(() => {
@@ -164,7 +153,7 @@ const CustomerPage: React.FC = () => {
   // Effect to get initial user location on component mount or after a reset
   useEffect(() => {
     if (!startLocation && !isLocating) {
-      fetchUserLocation();
+      fetchUserLocation(false);
     }
   }, [fetchUserLocation, startLocation, isLocating]);
 
@@ -176,7 +165,7 @@ const CustomerPage: React.FC = () => {
       if (document.visibilityState === 'visible') {
         // Only re-fetch if there's no active ride, to avoid disrupting a trip.
         if (!ride) {
-          fetchUserLocation();
+          fetchUserLocation(false);
         }
       }
     };
@@ -465,7 +454,7 @@ const CustomerPage: React.FC = () => {
                            />
                            <div className="absolute left-1 top-1/2 -translate-y-1/2 flex items-center">
                                 <button onClick={() => setPinDropMode('start')} className="p-2 text-2xl" title="تحديد على الخريطة">📍</button>
-                                <button onClick={fetchUserLocation} disabled={isLocating} className="p-2 text-2xl" title="تحديد موقعي الحالي">🎯</button>
+                                <button onClick={() => fetchUserLocation(true)} disabled={isLocating} className="p-2 text-2xl" title="تحديد موقعي الحالي">🎯</button>
                            </div>
                            {activeInput === 'start' && startSuggestions.length > 0 && (
                                <ul className="absolute bottom-full left-0 right-0 bg-slate-600 rounded-lg shadow-lg z-20 max-h-40 overflow-y-auto mb-1">
