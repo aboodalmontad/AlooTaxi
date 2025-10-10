@@ -212,7 +212,7 @@ const InteractiveMap: React.FC<InteractiveMapProps> & { DriverMarker: typeof Dri
         center={center} 
         zoom={zoom} 
         scrollWheelZoom={true} 
-        className="h-full w-full z-0"
+        className={`h-full w-full z-0 ${isNavigating ? 'navigation-view' : ''}`}
         {...rotationOptions as any}
     >
       <TileLayer

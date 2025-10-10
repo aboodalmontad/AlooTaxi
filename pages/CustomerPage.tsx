@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
 import InteractiveMap from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
 import { RideStatus, RouteInfo, VehicleType, LocationSuggestion, Ride, SyrianProvinces } from '../types';
-import { getRoute, searchLocations } from '../services/mapService';
+import { getRoute, searchLocations, getHaversineDistance } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
+import NavigationUI from '../components/NavigationUI';
 
 // Custom hook for debouncing input
 const useDebounce = (value: string, delay: number) => {
@@ -31,6 +32,9 @@ const CustomerPage: React.FC = () => {
   const [startLocation, setStartLocation] = useState<{ lat: number; lng: number; name: string; heading: number | null } | null>(null);
   const [endLocation, setEndLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+  const [navigationRoute, setNavigationRoute] = useState<RouteInfo | null>(null);
+  const [legProgress, setLegProgress] = useState<RouteInfo | null>(null);
+
   
   // UI and Flow State
   const [currentStep, setCurrentStep] = useState('setDestination'); // setDestination, selectVehicle, confirmRequest
@@ -164,6 +168,8 @@ const CustomerPage: React.FC = () => {
       setIsScheduling(false);
       setScheduledTime('');
       setMapViewMode('locked');
+      setNavigationRoute(null);
+      setLegProgress(null);
   }, []);
 
 
@@ -267,6 +273,47 @@ const CustomerPage: React.FC = () => {
     calculateRoute();
   }, [startLocation, endLocation]);
   
+  // Effect for navigation mode route calculation
+  useEffect(() => {
+    if (!ride || !startLocation || !driverLiveLocation) {
+        setNavigationRoute(null);
+        setLegProgress(null);
+        return;
+    }
+
+    const calculateNavRoute = async () => {
+        try {
+            let origin = startLocation;
+            let destination = ride.endLocation;
+
+            if (ride.status === RideStatus.PICKING_UP) {
+                // For customer, nav route is from driver to them, until pickup
+                origin = driverLiveLocation;
+                destination = startLocation;
+            } else if (ride.status === RideStatus.IN_PROGRESS) {
+                // Then from their current location to destination
+                origin = startLocation;
+                destination = ride.endLocation;
+            } else {
+                return;
+            }
+
+            const route = await getRoute(origin, destination);
+            setNavigationRoute(route);
+            setLegProgress(route);
+
+        } catch (error) {
+            console.error("Customer nav route calculation failed:", error);
+            setNavigationRoute(null);
+            setLegProgress(null);
+        }
+    };
+    
+    const debounceTimeout = setTimeout(calculateNavRoute, 2000);
+    return () => clearTimeout(debounceTimeout);
+
+  }, [ride, startLocation, driverLiveLocation]);
+
   const handleSuggestionSelect = (suggestion: LocationSuggestion, type: 'start' | 'end') => {
     const newLocation = {
         lat: suggestion.coordinates.lat,
@@ -353,9 +400,21 @@ const CustomerPage: React.FC = () => {
   const userProvince = user?.province || SyrianProvinces.DAMASCUS;
   const provinceCenter = PROVINCE_COORDS[userProvince] || DAMASCUS_COORDS;
 
-  const mainPolyline = ride?.polyline || routeInfo?.polyline;
-  const mapRoutes = mainPolyline ? [{ polyline: mainPolyline, color: '#3b82f6' }] : undefined;
   const canNavigate = mapViewMode === 'navigation' && !pinDropMode && typeof startLocation?.heading === 'number';
+
+  const mapRoutes = useMemo(() => {
+    if (canNavigate && navigationRoute) {
+        return [{
+            polyline: navigationRoute.polyline,
+            color: '#34D399',
+            casingColor: '#047857',
+            weight: 10,
+        }];
+    }
+    const mainPolyline = ride?.polyline || routeInfo?.polyline;
+    return mainPolyline ? [{ polyline: mainPolyline, color: '#3b82f6' }] : undefined;
+  }, [canNavigate, navigationRoute, ride, routeInfo]);
+
 
   return (
     <div className="h-screen w-screen flex flex-col relative overflow-hidden">
@@ -381,7 +440,13 @@ const CustomerPage: React.FC = () => {
         </div>
       )}
 
-      {ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
+      {canNavigate ? (
+          <NavigationUI
+            routeInfo={navigationRoute}
+            currentLocation={startLocation}
+            legProgress={legProgress}
+          />
+      ) : ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
           <div className="absolute inset-x-0 top-0 z-10 pt-20">
               <LiveTripDisplay {...liveTripData} />
           </div>

@@ -1,4 +1,4 @@
-import { RouteInfo, LocationSuggestion } from '../types';
+import { RouteInfo, LocationSuggestion, Step } from '../types';
 
 let apiKey = '5b3ce3597851110001cf6248e12d4b05e23f4f36be3b1b7f7c69a82a';
 
@@ -65,6 +65,7 @@ export const getRoute = async (
       distance: 0,
       duration: 0,
       polyline: [[start.lat, start.lng], [end.lat, end.lng]],
+      steps: [],
     };
   }
 
@@ -190,11 +191,22 @@ export const getRoute = async (
         throw new Error("تم استلام بيانات مسافة وزمن غير صالحة من خدمة الخرائط.");
     }
     
+    const steps: Step[] = routeFeature?.properties?.segments?.[0]?.steps?.map((step: any) => ({
+      distance: step.distance,
+      duration: step.duration,
+      type: step.type,
+      instruction: step.instruction,
+      name: step.name,
+      way_points: step.way_points,
+    })) || [];
+
+
     // Step 6: If all checks pass, format and return the data.
     return {
       distance: parseFloat((summary.distance / 1000).toFixed(2)), // meters to km
       duration: parseFloat((summary.duration / 60).toFixed(2)), // seconds to minutes
       polyline: polyline,
+      steps: steps,
     };
 
   } catch (error) {

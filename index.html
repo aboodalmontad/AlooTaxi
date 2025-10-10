@@ -64,6 +64,15 @@
             box-shadow: 0 0 5px rgba(0,0,0,0.5);
             animation: pulse 2s infinite;
         }
+        /* New styles for advanced navigation view */
+        .navigation-view .leaflet-map-pane {
+            transition: transform 0.5s ease-out;
+            transform: translateY(-25%);
+        }
+        .navigation-view .leaflet-control-container .leaflet-bottom {
+            transition: bottom 0.5s ease-out !important;
+            bottom: calc(25% + 10px) !important; /* Adjust to keep controls visible */
+        }
     </style>
   <script type="importmap">
 {

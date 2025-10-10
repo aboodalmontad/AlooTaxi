@@ -89,10 +89,20 @@ export type PricingSettings = {
     [key in VehicleType]: VehiclePricing;
 };
 
+export interface Step {
+    distance: number;
+    duration: number;
+    type: number;
+    instruction: string;
+    name: string;
+    way_points: [number, number];
+}
+
 export interface RouteInfo {
   distance: number; // in km
   duration: number; // in minutes
   polyline: [number, number][];
+  steps?: Step[];
 }
 
 export interface LocationSuggestion {

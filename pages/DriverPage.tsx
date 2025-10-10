@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
 import InteractiveMap, { RouteStyle } from '../components/InteractiveMap';
@@ -7,6 +7,7 @@ import { RideStatus, Driver, RouteInfo, Ride, SyrianProvinces } from '../types';
 import { getRoute, getHaversineDistance } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
 import { useDriverTracking } from '../hooks/useDriverTracking';
+import NavigationUI from '../components/NavigationUI';
 
 type MapViewMode = 'free' | 'locked' | 'navigation';
 
@@ -18,6 +19,8 @@ const DriverPage: React.FC = () => {
   const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number, heading: number | null } | null>(null);
   const [pickupRouteInfo, setPickupRouteInfo] = useState<RouteInfo | null>(null);
   const [currentLegInfo, setCurrentLegInfo] = useState<RouteInfo | null>(null);
+  const [navigationRoute, setNavigationRoute] = useState<RouteInfo | null>(null);
+
 
   const [lastCompletedRide, setLastCompletedRide] = useState<Ride | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
@@ -280,6 +283,7 @@ const DriverPage: React.FC = () => {
   useEffect(() => {
     if (!ride || !driverLocation || !isOnline) {
       setCurrentLegInfo(null);
+      setNavigationRoute(null);
       return;
     }
 
@@ -288,6 +292,7 @@ const DriverPage: React.FC = () => {
       ride.status !== RideStatus.IN_PROGRESS
     ) {
       setCurrentLegInfo(null);
+      setNavigationRoute(null);
       return;
     }
 
@@ -303,14 +308,17 @@ const DriverPage: React.FC = () => {
         if (distanceToLegDestination > MAX_ROUTE_DISTANCE_KM) {
             console.warn(`Live leg info calculation aborted due to excessive distance: ${distanceToLegDestination.toFixed(1)}km.`);
             setCurrentLegInfo(null);
+            setNavigationRoute(null);
             return;
         }
 
         const route = await getRoute(driverLocation, legDestination);
         setCurrentLegInfo(route);
+        setNavigationRoute(route);
         if(routeError) setRouteError(null);
       } catch (error) {
         setCurrentLegInfo(null);
+        setNavigationRoute(null);
         console.error("Failed to calculate live leg route:", error);
       }
     };
@@ -495,6 +503,18 @@ const DriverPage: React.FC = () => {
   const userProvince = driver?.province || SyrianProvinces.DAMASCUS;
   const provinceCenter = PROVINCE_COORDS[userProvince] || DAMASCUS_COORDS;
   const canNavigate = mapViewMode === 'navigation' && typeof driverLocation?.heading === 'number';
+  
+  const routeLegsForMap = useMemo(() => {
+    if (canNavigate && navigationRoute) {
+        return [{
+            polyline: navigationRoute.polyline,
+            color: '#34D399', // Bright green
+            casingColor: '#047857', // Darker green
+            weight: 10,
+        }];
+    }
+    return routeLegs;
+  }, [canNavigate, navigationRoute, routeLegs]);
 
   return (
     <div className="h-screen w-screen flex flex-col relative">
@@ -549,7 +569,13 @@ const DriverPage: React.FC = () => {
         </div>
       )}
 
-      {ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
+      {canNavigate ? (
+          <NavigationUI
+            routeInfo={navigationRoute}
+            currentLocation={driverLocation}
+            legProgress={currentLegInfo}
+          />
+      ) : ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
           <div className="absolute inset-x-0 top-0 z-10 pt-20">
               <LiveTripDisplay {...liveTripData} />
           </div>
@@ -558,7 +584,9 @@ const DriverPage: React.FC = () => {
       ) : (
           <IncomingRequest />
       )}
-      <CurrentTripInfo />
+      
+      {!canNavigate && <CurrentTripInfo />}
+
 
       <div className="flex-grow relative">
           <div className="absolute top-24 right-4 z-10 flex flex-col gap-2">
@@ -590,7 +618,7 @@ const DriverPage: React.FC = () => {
               userLocationAs="driver"
               startLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.startLocation : undefined}
               endLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.endLocation : undefined}
-              routes={routeLegs}
+              routes={routeLegsForMap}
               disableAutoPanZoom={mapViewMode !== 'locked' || canNavigate}
               onUserInteraction={() => setMapViewMode('free')}
               navigationMode={{
