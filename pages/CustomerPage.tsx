@@ -63,6 +63,8 @@ const CustomerPage: React.FC = () => {
   const prevRideRef = useRef<Ride | null>();
 
   const fetchUserLocation = useCallback(() => {
+      // Force a hard refresh by clearing the old location first.
+      setStartLocation(null); 
       setIsLocating(true);
       setStartQuery("...جاري تحديد الموقع");
       setRouteInfo(null);
@@ -161,10 +163,10 @@ const CustomerPage: React.FC = () => {
 
   // Effect to get initial user location on component mount or after a reset
   useEffect(() => {
-    if (!startLocation) {
+    if (!startLocation && !isLocating) {
       fetchUserLocation();
     }
-  }, [fetchUserLocation, startLocation]);
+  }, [fetchUserLocation, startLocation, isLocating]);
 
   // --- START: Professional fix for stale location after turning off VPN ---
   // This effect listens for when the user brings the app tab back into focus.

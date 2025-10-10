@@ -30,6 +30,8 @@ const DriverPage: React.FC = () => {
   const driver = user as Driver;
   
   const locateDriver = useCallback((isManualRequest: boolean) => {
+    // Force a hard refresh by clearing the old location first.
+    setDriverLocation(null);
     if (isManualRequest) {
         setIsManualLocating(true);
     }
@@ -110,10 +112,25 @@ const DriverPage: React.FC = () => {
   
   // Effect for initial location fetch
   useEffect(() => {
-    if (isOnline && !driverLocation) {
+    if (isOnline && !driverLocation && !isManualLocating) {
         locateDriver(false);
     }
-  }, [isOnline, driverLocation, locateDriver]);
+  }, [isOnline, driverLocation, locateDriver, isManualLocating]);
+
+  // Effect to handle stale location from VPNs by re-fetching on tab focus
+  useEffect(() => {
+      const handleVisibilityChange = () => {
+          if (document.visibilityState === 'visible' && isOnline) {
+              // User has returned to the app, force a location refresh
+              // to clear any stale data from a VPN.
+              locateDriver(false);
+          }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      return () => {
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
+  }, [isOnline, locateDriver]);
   
   const handleManualLocate = () => {
     locateDriver(true);
