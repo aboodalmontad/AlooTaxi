@@ -147,8 +147,22 @@ const InteractiveMap: React.FC<InteractiveMapProps> & { DriverMarker: typeof Dri
       return null;
   }
   
+  const rotationOptions = {
+    rotate: true,
+    touchRotate: true,
+    rotateControl: {
+      position: 'topleft'
+    }
+  };
+
   return (
-    <MapContainer center={center} zoom={zoom} scrollWheelZoom={true} className="h-full w-full z-0">
+    <MapContainer 
+        center={center} 
+        zoom={zoom} 
+        scrollWheelZoom={true} 
+        className="h-full w-full z-0"
+        {...rotationOptions as any}
+    >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
