@@ -6,6 +6,7 @@ import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } fro
 import { RideStatus, Driver, RouteInfo, Ride, SyrianProvinces } from '../types';
 import { getRoute, getHaversineDistance } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
+import { useDriverTracking } from '../hooks/useDriverTracking';
 
 const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
@@ -24,7 +25,6 @@ const DriverPage: React.FC = () => {
   const [isManualLocating, setIsManualLocating] = useState(false);
   const [isCurrentRideTooFar, setIsCurrentRideTooFar] = useState(false);
   const [isMapLocked, setIsMapLocked] = useState(true); // Lock map to follow driver by default
-  const watchIdRef = useRef<number | null>(null);
   const routeCalculationTimeoutRef = useRef<number | null>(null);
   
   const driver = user as Driver;
@@ -121,63 +121,47 @@ const DriverPage: React.FC = () => {
   };
 
 
-  // Effect for real-time location tracking (continuous watch)
-  useEffect(() => {
-    if (!isOnline || !driverLocation) { // Only start watching if online AND initial location is set
-      if (watchIdRef.current && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
+  // --- START: Improved Real-Time Location Tracking ---
+  // Memoized callbacks for the tracking hook to prevent unnecessary re-renders.
+  const handleLocationUpdate = useCallback((position: GeolocationPosition) => {
+      const { latitude, longitude } = position.coords;
+      const newLocation = {
+          lat: latitude,
+          lng: longitude,
+      };
+      setDriverLocation(newLocation);
+      updateDriverLocation(newLocation);
+      setLocationError(null); // Clear previous errors on successful update
+      setLocationWarning(null);
+  }, [updateDriverLocation]);
+
+  const handleLocationError = useCallback((err: GeolocationPositionError) => {
+      let message = "";
+      switch (err.code) {
+          case err.PERMISSION_DENIED:
+              message = "تم رفض إذن الموقع. تم إيقاف التتبع المباشر.";
+              setIsOnline(false); // Force offline if permission is revoked
+              break;
+          case err.POSITION_UNAVAILABLE:
+              message = "إشارة GPS ضعيفة. جاري محاولة إعادة الاتصال...";
+              break;
+          case err.TIMEOUT:
+              message = "انتهت مهلة تحديث الموقع. تحقق من اتصالك.";
+              break;
+          default:
+              message = "حدث خطأ في تتبع الموقع.";
+              break;
       }
-      return;
-    }
+      setLocationError(message);
+  }, []);
 
-    const success = (position: GeolocationPosition) => {
-        const { latitude, longitude } = position.coords;
-        const newLocation = {
-            lat: latitude,
-            lng: longitude,
-        };
-        setDriverLocation(newLocation);
-        updateDriverLocation(newLocation);
-        setLocationError(null);
-        setLocationWarning(null);
-    };
-
-    const error = (err: GeolocationPositionError) => {
-        let message = "";
-        switch (err.code) {
-            case err.PERMISSION_DENIED:
-                message = "تم رفض إذن الموقع. تم إيقاف التتبع المباشر.";
-                setIsOnline(false); // Force offline
-                break;
-            case err.POSITION_UNAVAILABLE:
-                message = "إشارة GPS ضعيفة. جاري محاولة إعادة الاتصال...";
-                break;
-            case err.TIMEOUT:
-                message = "انتهت مهلة تحديث الموقع. تحقق من اتصالك.";
-                break;
-            default:
-                message = "حدث خطأ في تتبع الموقع.";
-                break;
-        }
-        setLocationError(message);
-    };
-    
-    if (navigator.geolocation && !watchIdRef.current) {
-        watchIdRef.current = navigator.geolocation.watchPosition(success, error, {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 0,
-        });
-    }
-
-    return () => {
-      if (watchIdRef.current && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-    };
-  }, [isOnline, driverLocation, updateDriverLocation]);
+  // Use the custom hook to manage location tracking.
+  // It only starts tracking when the driver is online and has an initial location.
+  useDriverTracking(isOnline && !!driverLocation, {
+    onSuccess: handleLocationUpdate,
+    onError: handleLocationError,
+  });
+  // --- END: Improved Real-Time Location Tracking ---
 
 
   // Effect to calculate route to pickup point for new requests
