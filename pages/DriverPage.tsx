@@ -587,6 +587,7 @@ const DriverPage: React.FC = () => {
           <InteractiveMap 
               center={driverLocation ? [driverLocation.lat, driverLocation.lng] : provinceCenter}
               userLocation={driverLocation}
+              userLocationAs="driver"
               startLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.startLocation : undefined}
               endLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.endLocation : undefined}
               routes={routeLegs}
