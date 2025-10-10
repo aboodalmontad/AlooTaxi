@@ -63,83 +63,90 @@ const CustomerPage: React.FC = () => {
   const prevRideRef = useRef<Ride | null>();
 
   const fetchUserLocation = useCallback((isManualRequest = false) => {
-    // Step 1: Immediately clear all location-related state to force a UI reset.
     setStartLocation(null);
     setIsLocating(true);
-    setStartQuery("...جاري مسح الموقع القديم");
+    setStartQuery("...جاري تحديد الموقع");
     setRouteInfo(null);
     setRouteError(null);
     setLocationError(null);
     setLocationWarning(null);
 
-    // Step 2: Introduce a small delay.
-    // This forces React to commit the state updates from Step 1 and re-render the component.
-    // This can help break stubborn caching behavior in some browsers/environments by ensuring
-    // the subsequent Geolocation API call is not seen as a rapid follow-up to a previous one.
-    setTimeout(() => {
-        setStartQuery(isManualRequest ? "...جاري الحصول على موقع دقيق" : "...جاري تحديد الموقع");
+    const province = user?.province || SyrianProvinces.DAMASCUS;
+    const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
+    const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
+    
+    const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` };
 
-        const province = user?.province || SyrianProvinces.DAMASCUS;
-        const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
-        const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
+    if (!navigator.geolocation) {
+        setStartLocation(fallbackLocation);
+        setStartQuery(fallbackLocation.name);
+        setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
+        setIsLocating(false);
+        return;
+    }
 
-        if (!navigator.geolocation) {
-            setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
-            setStartQuery(`وسط ${provinceName}`);
-            setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
-            setIsLocating(false);
-            return;
+    const setFinalLocation = (position: GeolocationPosition, name: string) => {
+        const { latitude, longitude } = position.coords;
+        const newLocation = { lat: latitude, lng: longitude, name };
+        setStartLocation(newLocation);
+        setStartQuery(name);
+        setLocationError(null);
+        setLocationWarning(null);
+        setIsLocating(false);
+        setIsMapViewLocked(true);
+    };
+
+    const finalErrorHandler = (error: GeolocationPositionError) => {
+        let message = "";
+        switch (error.code) {
+            case error.PERMISSION_DENIED: message = "تم رفض إذن الوصول إلى الموقع. يرجى تفعيله من إعدادات المتصفح."; break;
+            case error.POSITION_UNAVAILABLE: message = "تعذر تحديد موقعك الحالي. قد تكون إشارة GPS أو الشبكة ضعيفة."; break;
+            case error.TIMEOUT: message = "انتهت مهلة طلب تحديد الموقع."; break;
+            default: message = "حدث خطأ غير متوقع."; break;
         }
+        setStartLocation(fallbackLocation);
+        setStartQuery(fallbackLocation.name);
+        setLocationError(`${message} سيتم استخدام موقع افتراضي.`);
+        setIsLocating(false);
+    };
 
-        const handlePosition = (position: GeolocationPosition) => {
+    // Step 1: Try for a quick, network-based location
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            // Got a quick position, show it and then try to improve it.
             const { latitude, longitude } = position.coords;
-            const newLocation = { lat: latitude, lng: longitude, name: "موقعي الحالي" };
-            setStartLocation(newLocation);
-            setStartQuery("موقعي الحالي");
-            setLocationWarning(null);
-            setLocationError(null);
-            setIsLocating(false);
-            setIsMapViewLocked(true); // Re-lock view on location fetch
-        };
+            setStartLocation({ lat: latitude, lng: longitude, name: "موقع تقريبي..." });
+            setStartQuery("موقع تقريبي...");
+            setLocationWarning("جاري تحسين دقة الموقع...");
+            setIsMapViewLocked(true);
 
-        const handleError = (error: GeolocationPositionError) => {
-            let message = "";
-            let isPermissionError = false;
-            switch (error.code) {
-                case error.PERMISSION_DENIED:
-                    message = "تم رفض إذن الوصول إلى الموقع.";
-                    isPermissionError = true;
-                    break;
-                case error.POSITION_UNAVAILABLE:
-                    message = "تعذر تحديد موقعك الحالي. قد تكون إشارة GPS ضعيفة أو خدمات الموقع متوقفة.";
-                    break;
-                case error.TIMEOUT:
-                    message = "انتهت مهلة طلب تحديد الموقع. يرجى التأكد من أن إشارة GPS قوية والمحاولة مرة أخرى.";
-                    break;
-                default:
-                    message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
-                    break;
-            }
-
-            setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
-            setStartQuery(`وسط ${provinceName}`);
-            let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
-            if (isPermissionError) {
-                fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
-            }
-            setLocationError(fullMessage);
-            setIsLocating(false);
-        };
-        
-        const options: PositionOptions = {
-          enableHighAccuracy: true,
-          timeout: 15000, // 15 seconds is a generous but firm timeout
-          maximumAge: 0,   // Force a fresh location, bypass any cache
-        };
-
-        navigator.geolocation.getCurrentPosition(handlePosition, handleError, options);
-    }, 100);
-  }, [user]);
+            // Step 2: Now try for a high-accuracy position in the background.
+            navigator.geolocation.getCurrentPosition(
+                (highAccuracyPosition) => {
+                    setFinalLocation(highAccuracyPosition, "موقعي الحالي");
+                },
+                (highAccuracyError) => {
+                    console.warn("High-accuracy failed, using initial position.", highAccuracyError);
+                    setFinalLocation(position, "موقعي الحالي (دقة شبكة)");
+                },
+                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+            );
+        },
+        (lowAccuracyError) => {
+            // The quick attempt failed, let's try a single, more patient high-accuracy attempt.
+            console.warn("Low-accuracy failed, trying high-accuracy directly.", lowAccuracyError);
+            setStartQuery("...جاري الحصول على موقع دقيق");
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    setFinalLocation(position, "موقعي الحالي");
+                },
+                finalErrorHandler, // If this last attempt fails, show the final error.
+                { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+            );
+        },
+        { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+    );
+}, [user]);
 
   const resetJourney = useCallback(() => {
       setStartLocation(null);
