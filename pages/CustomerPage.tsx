@@ -21,19 +21,6 @@ const useDebounce = (value: string, delay: number) => {
   return debouncedValue;
 };
 
-const isLocationInSyria = (lat: number, lng: number) => {
-    // Greatly, greatly expanded bounds to be extremely forgiving of GPS inaccuracies.
-    const SYRIA_BOUNDS = {
-        minLat: 30.0,
-        maxLat: 39.5,
-        minLng: 33.5,
-        maxLng: 44.5,
-    };
-    return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
-           lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;
-};
-
-
 const CustomerPage: React.FC = () => {
   const { user, logout } = useAuth();
   const { ride, requestRide, cancelRide, getEstimatedFare, driverLiveLocation, liveTripData } = useRide();
@@ -52,6 +39,11 @@ const CustomerPage: React.FC = () => {
   const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(true);
   
+  // --- START: New state for Pin Drop feature ---
+  const [pinDropMode, setPinDropMode] = useState<'start' | 'end' | null>(null);
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number } | null>(null);
+  // --- END: New state for Pin Drop feature ---
+
   // Search and Autocomplete State
   const [startQuery, setStartQuery] = useState('');
   const [endQuery, setEndQuery] = useState('');
@@ -70,85 +62,82 @@ const CustomerPage: React.FC = () => {
   const prevRideRef = useRef<Ride | null>();
 
   const fetchUserLocation = useCallback(() => {
-    setIsLocating(true);
-    setStartQuery("...جاري تحديد الموقع");
-    setRouteInfo(null);
-    setRouteError(null);
-    setLocationError(null);
-    setLocationWarning(null);
+      setIsLocating(true);
+      setStartQuery("...جاري تحديد الموقع");
+      setRouteInfo(null);
+      setRouteError(null);
+      setLocationError(null);
+      setLocationWarning(null);
 
-    const handleLocationError = (message: string, isPermissionError = false) => {
-        const province = user?.province || SyrianProvinces.DAMASCUS;
-        const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
-        const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
-        const defaultLocation = { 
-            lat: provinceCoords[0], 
-            lng: provinceCoords[1], 
-            name: `وسط ${provinceName}`
-        };
-        
-        setStartLocation(defaultLocation);
-        setStartQuery(defaultLocation.name);
-        
-        let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
-        if (isPermissionError) {
-            fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
-        }
-        setLocationError(fullMessage);
-        setIsLocating(false);
-    };
+      const province = user?.province || SyrianProvinces.DAMASCUS;
+      const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
+      const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
 
-    if (!navigator.geolocation) {
-        handleLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
-        return;
-    }
+      if (!navigator.geolocation) {
+          setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
+          setStartQuery(`وسط ${provinceName}`);
+          setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
+          setIsLocating(false);
+          return;
+      }
+      
+      const handlePosition = (position: GeolocationPosition) => {
+          const { latitude, longitude } = position.coords;
+          const newLocation = { lat: latitude, lng: longitude, name: "موقعي الحالي" };
+          setStartLocation(newLocation);
+          setStartQuery("موقعي الحالي");
+          setLocationWarning(null);
+          setLocationError(null);
+          setIsLocating(false);
+      };
 
-    new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 20000, // Increased timeout for better results
-            maximumAge: 0,
-        });
-    })
-    .then(position => {
-        const { latitude, longitude } = position.coords;
-        const newLocation = { 
-            lat: latitude, 
-            lng: longitude,
-            name: "موقعي الحالي"
-        };
-        setStartLocation(newLocation);
-        setStartQuery("موقعي الحالي");
-        setIsLocating(false);
-        setLocationError(null);
+      const handleError = (error: GeolocationPositionError) => {
+          let message = "";
+          let isPermissionError = false;
+          switch (error.code) {
+              case error.PERMISSION_DENIED:
+                  message = "تم رفض إذن الوصول إلى الموقع.";
+                  isPermissionError = true;
+                  break;
+              case error.POSITION_UNAVAILABLE:
+                  message = "تعذر تحديد موقعك الحالي. يرجى التأكد من أن إشارة GPS قوية.";
+                  break;
+              case error.TIMEOUT:
+                  message = "انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مرة أخرى.";
+                  break;
+              default:
+                  message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
+                  break;
+          }
 
-        if (isLocationInSyria(latitude, longitude)) {
-            setLocationWarning(null);
-        } else {
-            setLocationWarning("تحذير: تم تحديد موقع خارج النطاق الجغرافي للخدمة. قد لا تتمكن من طلب رحلة.");
-            console.warn(`Geolocation API returned coordinates outside Syria for customer: ${latitude}, ${longitude}`);
-        }
-    })
-    .catch((error: GeolocationPositionError) => {
-        let message = "";
-        let isPermissionError = false;
-        switch (error.code) {
-            case error.PERMISSION_DENIED:
-                message = "تم رفض إذن الوصول إلى الموقع.";
-                isPermissionError = true;
-                break;
-            case error.POSITION_UNAVAILABLE:
-                message = "تعذر تحديد موقعك الحالي. يرجى التأكد من أن إشارة GPS قوية.";
-                break;
-            case error.TIMEOUT:
-                message = "انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مرة أخرى.";
-                break;
-            default:
-                message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
-                break;
-        }
-        handleLocationError(message, isPermissionError);
-    });
+          setStartLocation({ lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}` });
+          setStartQuery(`وسط ${provinceName}`);
+          let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
+          if (isPermissionError) {
+              fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
+          }
+          setLocationError(fullMessage);
+          setIsLocating(false);
+      };
+
+      // Two-phase location fetching for better UX
+      // 1. Quick, low-accuracy attempt
+      navigator.geolocation.getCurrentPosition(
+          handlePosition,
+          () => {
+              // If low accuracy fails, immediately try high accuracy
+              navigator.geolocation.getCurrentPosition(handlePosition, handleError, {
+                  enableHighAccuracy: true,
+                  timeout: 20000,
+                  maximumAge: 0,
+              });
+          },
+          {
+              enableHighAccuracy: false,
+              timeout: 5000, // 5 seconds for a quick response
+              maximumAge: 60000,
+          }
+      );
   }, [user]);
 
   const resetJourney = useCallback(() => {
@@ -187,7 +176,7 @@ const CustomerPage: React.FC = () => {
 
   // Effect for fetching start location suggestions
   useEffect(() => {
-    if (debouncedStartQuery && debouncedStartQuery !== 'موقعي الحالي' && !debouncedStartQuery.startsWith('وسط ') && activeInput === 'start') {
+    if (debouncedStartQuery && debouncedStartQuery !== 'موقعي الحالي' && !debouncedStartQuery.startsWith('وسط ') && !debouncedStartQuery.startsWith('موقع محدد') && activeInput === 'start') {
       const fetchSuggestions = async () => {
         const results = await searchLocations(debouncedStartQuery, startLocation ?? undefined);
         setStartSuggestions(results);
@@ -200,7 +189,7 @@ const CustomerPage: React.FC = () => {
 
   // Effect for fetching end location suggestions
   useEffect(() => {
-    if (debouncedEndQuery && activeInput === 'end') {
+    if (debouncedEndQuery && !debouncedEndQuery.startsWith('موقع محدد') && activeInput === 'end') {
       const fetchSuggestions = async () => {
         const results = await searchLocations(debouncedEndQuery, startLocation ?? undefined);
         setEndSuggestions(results);
@@ -268,6 +257,28 @@ const CustomerPage: React.FC = () => {
     setCurrentStep('confirmRequest');
   };
 
+  // --- START: New Handler for Pin Drop feature ---
+  const handleConfirmPinDrop = () => {
+      if (!mapCenter || !pinDropMode) return;
+
+      const newLocation = {
+          ...mapCenter,
+          name: `موقع محدد (${mapCenter.lat.toFixed(4)}, ${mapCenter.lng.toFixed(4)})`,
+      };
+
+      if (pinDropMode === 'start') {
+          setStartLocation(newLocation);
+          setStartQuery(newLocation.name);
+          setLocationError(null);
+          setLocationWarning(null);
+      } else {
+          setEndLocation(newLocation);
+          setEndQuery(newLocation.name);
+      }
+      setPinDropMode(null);
+  };
+  // --- END: New Handler ---
+
   const RideStatusIndicator = () => {
     if (!ride || ride.status === RideStatus.IN_PROGRESS) return null; // IN_PROGRESS is handled by LiveTripDisplay
     let message = "";
@@ -297,7 +308,7 @@ const CustomerPage: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col relative overflow-hidden">
-      <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-20">
+      <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-30">
         <h1 className="text-2xl font-bold text-primary">ألو تكسي</h1>
         <div>
           <span className="ml-4">أهلاً، {user?.name}</span>
@@ -306,14 +317,14 @@ const CustomerPage: React.FC = () => {
       </header>
 
       {locationError && (
-        <div className="absolute top-20 right-4 left-4 bg-red-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-10 text-center animate-fade-in-down">
+        <div className="absolute top-20 right-4 left-4 bg-red-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
             <p className="font-bold">خطأ في تحديد الموقع</p>
             <p>{locationError}</p>
         </div>
       )}
       
       {locationWarning && !locationError && (
-        <div className="absolute top-20 right-4 left-4 bg-yellow-600/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-10 text-center animate-fade-in-down">
+        <div className="absolute top-20 right-4 left-4 bg-yellow-600/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
             <p className="font-bold">تنبيه بشأن الموقع</p>
             <p>{locationWarning}</p>
         </div>
@@ -335,11 +346,38 @@ const CustomerPage: React.FC = () => {
           startLocation={ride?.status !== RideStatus.IDLE ? ride?.startLocation : startLocation ?? undefined}
           endLocation={ride?.status !== RideStatus.IDLE ? ride?.endLocation : endLocation ?? undefined}
           routePolyline={ride?.polyline || routeInfo?.polyline}
+          onCenterChange={setMapCenter}
+          disableAutoPanZoom={!!pinDropMode}
         />
       </div>
 
+      {/* --- START: Pin Drop UI --- */}
+      {pinDropMode && (
+        <>
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-full z-10 pointer-events-none">
+                <div className="relative flex flex-col items-center animate-bounce">
+                    <span className="text-5xl drop-shadow-lg">📍</span>
+                    <div className="w-3 h-3 bg-black/30 rounded-full shadow-md -mt-2"></div>
+                </div>
+            </div>
+
+            <div className="absolute bottom-0 left-0 right-0 p-4 bg-slate-800/90 backdrop-blur-sm z-20 rounded-t-2xl shadow-lg animate-fade-in-up">
+                <p className="text-center text-slate-300 mb-3">حرّك الخريطة لوضع الدبوس في الموقع المطلوب ثم اضغط تأكيد.</p>
+                <div className="flex gap-4">
+                    <button onClick={handleConfirmPinDrop} className="flex-1 py-3 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">
+                        تأكيد الموقع
+                    </button>
+                    <button onClick={() => setPinDropMode(null)} className="flex-1 py-3 bg-slate-600 text-white rounded-lg hover:bg-slate-500">
+                        إلغاء
+                    </button>
+                </div>
+            </div>
+        </>
+      )}
+      {/* --- END: Pin Drop UI --- */}
+
       {/* --- Booking Panel --- */}
-      { !ride &&
+      { !ride && !pinDropMode &&
       <div 
         className="absolute bottom-0 right-0 left-0 z-10 transition-transform duration-300 ease-in-out"
         style={{ transform: isPanelExpanded ? 'translateY(0)' : 'translateY(calc(100% - 60px))' }}
@@ -371,10 +409,13 @@ const CustomerPage: React.FC = () => {
                                }}
                                onFocus={() => setActiveInput('start')}
                                placeholder="نقطة الانطلاق"
-                               className="w-full p-3 pl-10 bg-slate-700 rounded-lg"
+                               className="w-full p-3 pl-20 bg-slate-700 rounded-lg"
                                disabled={isLocating}
                            />
-                           <button onClick={fetchUserLocation} disabled={isLocating} className="absolute left-2 top-1/2 -translate-y-1/2 text-2xl" title="تحديد موقعي الحالي">🎯</button>
+                           <div className="absolute left-1 top-1/2 -translate-y-1/2 flex items-center">
+                                <button onClick={() => setPinDropMode('start')} className="p-2 text-2xl" title="تحديد على الخريطة">📍</button>
+                                <button onClick={fetchUserLocation} disabled={isLocating} className="p-2 text-2xl" title="تحديد موقعي الحالي">🎯</button>
+                           </div>
                            {activeInput === 'start' && startSuggestions.length > 0 && (
                                <ul className="absolute bottom-full left-0 right-0 bg-slate-600 rounded-lg shadow-lg z-20 max-h-40 overflow-y-auto mb-1">
                                    {startSuggestions.map(s => <li key={s.name + s.coordinates.lat} onClick={() => handleSuggestionSelect(s, 'start')} className="p-2 hover:bg-primary cursor-pointer">{s.name}</li>)}
@@ -391,8 +432,9 @@ const CustomerPage: React.FC = () => {
                                }}
                                onFocus={() => setActiveInput('end')}
                                placeholder="إلى أين تريد الذهاب؟"
-                               className="w-full p-3 bg-slate-700 rounded-lg"
+                               className="w-full p-3 pl-12 bg-slate-700 rounded-lg"
                            />
+                           <button onClick={() => setPinDropMode('end')} className="absolute left-1 top-1/2 -translate-y-1/2 p-2 text-2xl" title="تحديد على الخريطة">📍</button>
                            {activeInput === 'end' && endSuggestions.length > 0 && (
                                <ul className="absolute bottom-full left-0 right-0 bg-slate-600 rounded-lg shadow-lg z-20 max-h-40 overflow-y-auto mb-1">
                                    {endSuggestions.map(s => <li key={s.name + s.coordinates.lat} onClick={() => handleSuggestionSelect(s, 'end')} className="p-2 hover:bg-primary cursor-pointer">{s.name}</li>)}

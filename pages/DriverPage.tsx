@@ -4,20 +4,8 @@ import { useRide } from '../contexts/RideContext';
 import InteractiveMap from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
 import { RideStatus, Driver, RouteInfo, Ride, SyrianProvinces } from '../types';
-import { getRoute } from '../services/mapService';
+import { getRoute, getHaversineDistance } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
-
-const isLocationInSyria = (lat: number, lng: number) => {
-    // Greatly, greatly expanded bounds to be extremely forgiving of GPS inaccuracies.
-    const SYRIA_BOUNDS = {
-        minLat: 30.0,
-        maxLat: 39.5,
-        minLng: 33.5,
-        maxLng: 44.5,
-    };
-    return lat >= SYRIA_BOUNDS.minLat && lat <= SYRIA_BOUNDS.maxLat &&
-           lng >= SYRIA_BOUNDS.minLng && lng <= SYRIA_BOUNDS.maxLng;
-};
 
 const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
@@ -34,64 +22,45 @@ const DriverPage: React.FC = () => {
   const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [showEndTripConfirmation, setShowEndTripConfirmation] = useState(false);
   const [isManualLocating, setIsManualLocating] = useState(false);
+  const [isCurrentRideTooFar, setIsCurrentRideTooFar] = useState(false);
+  const [isMapLocked, setIsMapLocked] = useState(true); // Lock map to follow driver by default
   const watchIdRef = useRef<number | null>(null);
   const routeCalculationTimeoutRef = useRef<number | null>(null);
   
   const driver = user as Driver;
   
-  const fetchInitialDriverLocation = useCallback(() => {
-    const handleLocationError = (message: string, forceOffline = false, isPermissionError = false) => {
-        const province = driver?.province || SyrianProvinces.DAMASCUS;
-        const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
-        const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
-        const defaultLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
+  const locateDriver = useCallback((isManualRequest: boolean) => {
+    if (isManualRequest) {
+        setIsManualLocating(true);
+    }
+    setLocationError(null);
+    setLocationWarning(null);
 
-        // Set location only if it's not already set, to avoid overwriting a good location from watchPosition
-        setDriverLocation(current => current ?? defaultLocation);
-        updateDriverLocation(defaultLocation);
-        
-        let fullMessage = `${message} سيتم استخدام موقع افتراضي في ${provinceName}.`;
-        if (isPermissionError) {
-            fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
-        }
-        setLocationError(fullMessage);
-        setLocationWarning(null);
-
-        if (forceOffline) {
-            setIsOnline(false);
-        }
-    };
+    const province = driver?.province || SyrianProvinces.DAMASCUS;
+    const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
+    const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
 
     if (!navigator.geolocation) {
-        handleLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.", true);
+        setDriverLocation(current => current ?? { lat: provinceCoords[0], lng: provinceCoords[1] });
+        updateDriverLocation({ lat: provinceCoords[0], lng: provinceCoords[1] });
+        setLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.");
+        if (isManualRequest) setIsManualLocating(false);
+        setIsOnline(false);
         return;
     }
 
-    new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 20000,
-            maximumAge: 0,
-        });
-    })
-    .then(position => {
+    const handlePosition = (position: GeolocationPosition) => {
         const { latitude, longitude } = position.coords;
-        const newLocation = {
-            lat: latitude,
-            lng: longitude,
-        };
+        const newLocation = { lat: latitude, lng: longitude };
+        
         setDriverLocation(newLocation);
         updateDriverLocation(newLocation);
+        setLocationWarning(null);
         setLocationError(null);
+        if (isManualRequest) setIsManualLocating(false);
+    };
 
-        if (isLocationInSyria(latitude, longitude)) {
-            setLocationWarning(null);
-        } else {
-             setLocationWarning("تحذير: موقعك الحالي خارج منطقة الخدمة. قد لا تستقبل طلبات.");
-             console.warn(`Geolocation API returned coordinates outside Syria: ${latitude}, ${longitude}`);
-        }
-    })
-    .catch((error: GeolocationPositionError) => {
+    const handleError = (error: GeolocationPositionError) => {
         let message = "";
         let forceOffline = false;
         let isPermissionError = false;
@@ -102,26 +71,54 @@ const DriverPage: React.FC = () => {
                 isPermissionError = true;
                 break;
             case error.POSITION_UNAVAILABLE:
-                message = "إشارة GPS ضعيفة أو غير متاحة. سيتم استخدام موقع افتراضي.";
+                message = "إشارة GPS ضعيفة أو غير متاحة.";
                 break;
             case error.TIMEOUT:
-                message = "انتهت مهلة طلب تحديد الموقع. يرجى التحقق من اتصالك.";
+                message = "انتهت مهلة طلب تحديد الموقع.";
                 break;
             default:
-                message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
+                message = "حدث خطأ غير متوقع.";
                 break;
         }
-        handleLocationError(message, forceOffline, isPermissionError);
-    });
+        
+        const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1] };
+        setDriverLocation(current => current ?? fallbackLocation);
+        updateDriverLocation(fallbackLocation);
+
+        let fullMessage = `${message}`;
+        if (isPermissionError) {
+            fullMessage += " يرجى تفعيل إذن الموقع في إعدادات المتصفح ثم تحديث الصفحة.";
+        }
+        setLocationError(fullMessage);
+        if (isManualRequest) setIsManualLocating(false);
+        if (forceOffline) setIsOnline(false);
+    };
+
+    // Two-phase location fetching
+    navigator.geolocation.getCurrentPosition(
+      handlePosition,
+      () => {
+          navigator.geolocation.getCurrentPosition(handlePosition, handleError, {
+              enableHighAccuracy: true,
+              timeout: 20000,
+              maximumAge: 0,
+          });
+      },
+      { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+    );
   }, [driver, updateDriverLocation]);
-
-
+  
   // Effect for initial location fetch
   useEffect(() => {
     if (isOnline && !driverLocation) {
-        fetchInitialDriverLocation();
+        locateDriver(false);
     }
-  }, [isOnline, driverLocation, fetchInitialDriverLocation]);
+  }, [isOnline, driverLocation, locateDriver]);
+  
+  const handleManualLocate = () => {
+    locateDriver(true);
+    setIsMapLocked(true); // Re-enable "follow me" mode
+  };
 
 
   // Effect for real-time location tracking (continuous watch)
@@ -142,14 +139,8 @@ const DriverPage: React.FC = () => {
         };
         setDriverLocation(newLocation);
         updateDriverLocation(newLocation);
-        setLocationError(null); // Clear any intermittent error on success
-
-        if (isLocationInSyria(latitude, longitude)) {
-            setLocationWarning(null); // Good location, clear warning
-        } else {
-            console.warn(`watchPosition received an out-of-bounds location: ${latitude}, ${longitude}`);
-            setLocationWarning(current => current || "تحذير: تتبع الموقع خارج منطقة الخدمة.");
-        }
+        setLocationError(null);
+        setLocationWarning(null);
     };
 
     const error = (err: GeolocationPositionError) => {
@@ -172,7 +163,6 @@ const DriverPage: React.FC = () => {
         setLocationError(message);
     };
     
-    // Start watching for position changes only after initial location is confirmed
     if (navigator.geolocation && !watchIdRef.current) {
         watchIdRef.current = navigator.geolocation.watchPosition(success, error, {
             enableHighAccuracy: true,
@@ -192,7 +182,19 @@ const DriverPage: React.FC = () => {
 
   // Effect to calculate route to pickup point for new requests
   useEffect(() => {
+    setIsCurrentRideTooFar(false);
+    
     if (ride?.status === RideStatus.REQUESTED && driverLocation && isOnline) {
+      const distanceToPickup = getHaversineDistance(driverLocation, ride.startLocation);
+      const MAX_PICKUP_DISTANCE_KM = 200;
+
+      if (distanceToPickup > MAX_PICKUP_DISTANCE_KM) {
+        console.warn(`Ride request ignored as it is too far away: ${distanceToPickup.toFixed(1)} km.`);
+        setIsCurrentRideTooFar(true);
+        setPickupRouteInfo(null);
+        return;
+      }
+
       const calculatePickupRoute = async () => {
         try {
           const route = await getRoute(driverLocation, ride.startLocation);
@@ -210,11 +212,6 @@ const DriverPage: React.FC = () => {
 
   // Effect to calculate and display route for active trip stages
   useEffect(() => {
-    // Clear any pending calculation when dependencies change
-    if (routeCalculationTimeoutRef.current) {
-        clearTimeout(routeCalculationTimeoutRef.current);
-    }
-
     const calculateAndSetRoute = async () => {
       if (!ride || !driverLocation) {
         setDisplayPolyline(undefined);
@@ -223,18 +220,25 @@ const DriverPage: React.FC = () => {
       }
 
       try {
-        setRouteError(null); // Clear previous errors
+        setRouteError(null);
         let destination;
-        if (ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.PICKING_UP) {
-          // Route from driver to pickup location
+        if (ride.status === RideStatus.PICKING_UP) {
           destination = ride.startLocation;
         } else if (ride.status === RideStatus.IN_PROGRESS) {
-          // Route from driver to destination
           destination = ride.endLocation;
         } else {
-          // For any other status, there's no route to display
           setDisplayPolyline(undefined);
           return;
+        }
+
+        const distanceToDestination = getHaversineDistance(driverLocation, destination);
+        const MAX_ROUTE_DISTANCE_KM = 200;
+        if (distanceToDestination > MAX_ROUTE_DISTANCE_KM) {
+            const errorMsg = `المسافة إلى الوجهة (${Math.round(distanceToDestination)} كم) كبيرة جداً، تم إلغاء حساب المسار.`;
+            console.error(`Live route calculation aborted due to excessive distance: ${distanceToDestination.toFixed(1)}km.`);
+            setRouteError(errorMsg);
+            setDisplayPolyline(undefined);
+            return;
         }
 
         const route = await getRoute(driverLocation, destination);
@@ -251,10 +255,10 @@ const DriverPage: React.FC = () => {
       }
     };
 
-    // Debounce the route calculation to avoid excessive API calls during rapid location updates
-    routeCalculationTimeoutRef.current = window.setTimeout(() => {
-        calculateAndSetRoute();
-    }, 1500); // 1.5-second debounce
+    if (routeCalculationTimeoutRef.current) {
+      clearTimeout(routeCalculationTimeoutRef.current);
+    }
+    routeCalculationTimeoutRef.current = window.setTimeout(calculateAndSetRoute, 1500);
 
     return () => {
       if (routeCalculationTimeoutRef.current) {
@@ -270,9 +274,7 @@ const DriverPage: React.FC = () => {
       return;
     }
 
-    // Only calculate for active trip stages
     if (
-      ride.status !== RideStatus.ACCEPTED &&
       ride.status !== RideStatus.PICKING_UP &&
       ride.status !== RideStatus.IN_PROGRESS
     ) {
@@ -286,23 +288,29 @@ const DriverPage: React.FC = () => {
           ride.status === RideStatus.IN_PROGRESS
             ? ride.endLocation
             : ride.startLocation;
+            
+        const distanceToLegDestination = getHaversineDistance(driverLocation, legDestination);
+        const MAX_ROUTE_DISTANCE_KM = 200;
+        if (distanceToLegDestination > MAX_ROUTE_DISTANCE_KM) {
+            console.warn(`Live leg info calculation aborted due to excessive distance: ${distanceToLegDestination.toFixed(1)}km.`);
+            setCurrentLegInfo(null);
+            return;
+        }
 
         const route = await getRoute(driverLocation, legDestination);
         setCurrentLegInfo(route);
-        // We can clear the main route error if this sub-calculation succeeds
         if(routeError) setRouteError(null);
       } catch (error) {
         setCurrentLegInfo(null);
         console.error("Failed to calculate live leg route:", error);
-        // Don't set a visible error for this, it's just for stats and can fail silently
       }
     };
 
-    const debounceTimeout = setTimeout(calculateLegRoute, 2000); // Debounce to avoid excessive API calls
+    const debounceTimeout = setTimeout(calculateLegRoute, 2000);
 
     return () => clearTimeout(debounceTimeout);
     
-  }, [ride?.status, driverLocation, isOnline]);
+  }, [ride?.status, driverLocation, isOnline, ride?.startLocation, ride?.endLocation, routeError]);
 
 
   // Effect to handle trip completion feedback
@@ -333,63 +341,6 @@ const DriverPage: React.FC = () => {
     setShowEndTripConfirmation(false);
   };
 
-  const handleManualLocate = () => {
-    setIsManualLocating(true);
-    setLocationError(null);
-    setLocationWarning(null);
-
-    const handleError = (error: GeolocationPositionError) => {
-        let message = "";
-        switch (error.code) {
-            case error.PERMISSION_DENIED:
-                message = "تم رفض إذن الوصول إلى الموقع. يرجى تفعيله من الإعدادات.";
-                setIsOnline(false); // If they manually try and fail due to permissions, they should go offline.
-                break;
-            case error.POSITION_UNAVAILABLE:
-                message = "تعذر تحديد موقعك. يرجى التأكد من أن إشارة GPS قوية.";
-                break;
-            case error.TIMEOUT:
-                message = "انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مرة أخرى.";
-                break;
-            default:
-                message = "حدث خطأ غير متوقع أثناء محاولة تحديد موقعك.";
-                break;
-        }
-        setLocationError(message);
-        setIsManualLocating(false);
-    };
-
-    if (!navigator.geolocation) {
-        setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
-        setIsManualLocating(false);
-        return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-        position => {
-            const { latitude, longitude } = position.coords;
-            const newLocation = { lat: latitude, lng: longitude };
-            setDriverLocation(newLocation);
-            updateDriverLocation(newLocation);
-            setIsManualLocating(false);
-            setLocationError(null);
-
-            if (isLocationInSyria(latitude, longitude)) {
-                setLocationWarning(null);
-            } else {
-                 setLocationWarning("تحذير: الموقع المحدد يدوياً خارج منطقة الخدمة.");
-                 console.warn(`Manual locate returned coordinates outside Syria: ${latitude}, ${longitude}`);
-            }
-        },
-        handleError,
-        {
-            enableHighAccuracy: true,
-            timeout: 20000,
-            maximumAge: 0,
-        }
-    );
-  };
-
   const TripSummary: React.FC<{ ride: Ride }> = ({ ride }) => {
     if (ride.finalFare === undefined) return null;
     const driverShare = Math.round(ride.finalFare * 0.80);
@@ -405,6 +356,15 @@ const DriverPage: React.FC = () => {
   };
 
   const IncomingRequest: React.FC = () => {
+      if (isCurrentRideTooFar) {
+          return (
+              <div className="absolute top-20 right-4 left-4 bg-yellow-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
+                  <h3 className="text-xl font-bold text-yellow-200 mb-2">تم تجاهل طلب رحلة</h3>
+                  <p>الزبون بعيد جداً عن موقعك الحالي.</p>
+              </div>
+          );
+      }
+      
       if(!ride || ride.status !== RideStatus.REQUESTED || !isOnline) return null;
 
       const driverShare = Math.round(ride.estimatedFare * 0.80); // Assume 80% share
@@ -469,12 +429,8 @@ const DriverPage: React.FC = () => {
     let actionButton = null;
     
     switch(ride.status) {
-        case RideStatus.ACCEPTED:
-            statusText = 'في الطريق إلى الزبون';
-            actionButton = <button onClick={() => updateRideStatus(RideStatus.PICKING_UP)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">لقد وصلت لموقع الالتقاط</button>;
-            break;
         case RideStatus.PICKING_UP:
-            statusText = 'في انتظار ركوب الزبون';
+            statusText = 'في الطريق إلى الزبون';
             actionButton = <button onClick={() => updateRideStatus(RideStatus.IN_PROGRESS)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">التقاط الزبون وبدء الرحلة</button>;
             break;
     }
@@ -604,6 +560,8 @@ const DriverPage: React.FC = () => {
               startLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.startLocation : undefined}
               endLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.endLocation : undefined}
               routePolyline={displayPolyline}
+              disableAutoPanZoom={!isMapLocked}
+              onUserInteraction={() => setIsMapLocked(false)}
           />
         ) : (
           <div className="h-full w-full flex items-center justify-center bg-slate-900">

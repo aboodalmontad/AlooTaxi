@@ -51,16 +51,40 @@ const MapUpdater: React.FC<MapUpdaterProps> = ({ center, zoom }) => {
     return null;
 };
 
-interface MapEventsProps {
-    onMapClick: (e: LeafletMouseEvent) => void;
-}
-
-const MapEvents: React.FC<MapEventsProps> = ({ onMapClick }) => {
-    useMapEvents({
-        click: onMapClick,
+// --- START: Component for Pin Drop feature ---
+const MapCenterHandler: React.FC<{ onCenterChange?: (center: { lat: number; lng: number }) => void }> = ({ onCenterChange }) => {
+    const map = useMapEvents({
+        moveend: () => {
+            if (onCenterChange) {
+                const center = map.getCenter();
+                onCenterChange({ lat: center.lat, lng: center.lng });
+            }
+        },
+        load: () => { // Also fire on initial load to get starting center
+            if (onCenterChange) {
+                const center = map.getCenter();
+                onCenterChange({ lat: center.lat, lng: center.lng });
+            }
+        },
     });
     return null;
-}
+};
+// --- END: Component ---
+
+// --- START: Component to detect user interaction ---
+const MapInteractionHandler: React.FC<{ onUserInteraction: () => void }> = ({ onUserInteraction }) => {
+    useMapEvents({
+        dragstart: () => {
+            onUserInteraction();
+        },
+        zoomstart: () => {
+            onUserInteraction();
+        },
+    });
+    return null;
+};
+// --- END: Component ---
+
 
 interface InteractiveMapProps {
   center?: [number, number];
@@ -70,7 +94,9 @@ interface InteractiveMapProps {
   userLocation?: { lat: number; lng: number; };
   driverLocation?: { lat: number; lng: number; };
   routePolyline?: [number, number][];
-  onMapClick?: (e: LeafletMouseEvent) => void;
+  onCenterChange?: (center: { lat: number; lng: number }) => void; // Prop for Pin Drop
+  disableAutoPanZoom?: boolean;
+  onUserInteraction?: () => void;
 }
 
 const InteractiveMap: React.FC<InteractiveMapProps> = ({
@@ -81,7 +107,9 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
   userLocation,
   driverLocation,
   routePolyline,
-  onMapClick
+  onCenterChange,
+  disableAutoPanZoom = false,
+  onUserInteraction,
 }) => {
 
   const bounds = routePolyline && routePolyline.length > 0
@@ -143,9 +171,10 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
         </>
       )}
       
-      {bounds.length > 1 && <FitBounds bounds={bounds} />}
-      {!bounds || bounds.length <= 1 && <MapUpdater center={center} zoom={zoom} />}
-      {onMapClick && <MapEvents onMapClick={onMapClick} />}
+      {!disableAutoPanZoom && bounds.length > 1 && <FitBounds bounds={bounds} />}
+      {!disableAutoPanZoom && (!bounds || bounds.length <= 1) && <MapUpdater center={center} zoom={zoom} />}
+      {onCenterChange && <MapCenterHandler onCenterChange={onCenterChange} />}
+      {onUserInteraction && <MapInteractionHandler onUserInteraction={onUserInteraction} />}
     </MapContainer>
   );
 };

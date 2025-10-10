@@ -84,19 +84,26 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setLiveTripData(null); // Clear any previous live data
   }, [user, getEstimatedFare]);
 
-  const acceptRide = (driver: Driver) => {
-    if (ride && ride.status === RideStatus.REQUESTED) {
-      setRide({ ...ride, status: RideStatus.ACCEPTED, driverId: driver.id });
-    }
-  };
+  const acceptRide = useCallback((driver: Driver) => {
+    setRide(prevRide => {
+      if (prevRide && prevRide.status === RideStatus.REQUESTED) {
+        // Streamline the flow: Accepting a ride immediately means the driver is picking up.
+        return { ...prevRide, status: RideStatus.PICKING_UP, driverId: driver.id };
+      }
+      return prevRide;
+    });
+  }, []);
 
-  const rejectRide = () => {
-    // For the mock, this simply dismisses the ride for the driver.
-    // In a real system, it would go back to a queue.
-    if (ride && ride.status === RideStatus.REQUESTED) {
-      setRide(null);
-    }
-  };
+  const rejectRide = useCallback(() => {
+    setRide(prevRide => {
+      // For the mock, this simply dismisses the ride for the driver.
+      // In a real system, it would go back to a queue.
+      if (prevRide && prevRide.status === RideStatus.REQUESTED) {
+        return null;
+      }
+      return prevRide;
+    });
+  }, []);
   
   const updateDriverLocation = useCallback((location: { lat: number; lng: number }) => {
     setDriverLiveLocation(location);

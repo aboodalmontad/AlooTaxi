@@ -8,8 +8,10 @@ export const setMapApiKey = (newKey: string) => {
     }
 };
 
+// Use absolute URLs for direct API calls, as ORS supports CORS.
 const DIRECTIONS_API_URL = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
 const GEOCODE_API_URL = 'https://api.openrouteservice.org/geocode/search';
+
 
 /**
  * Calculates the Haversine distance between two points on the Earth.
@@ -17,7 +19,7 @@ const GEOCODE_API_URL = 'https://api.openrouteservice.org/geocode/search';
  * @param coords2 - The second coordinate object { lat, lng }.
  * @returns The distance in kilometers.
  */
-const getHaversineDistance = (
+export const getHaversineDistance = (
   coords1: { lat: number; lng: number },
   coords2: { lat: number; lng: number }
 ): number => {
@@ -209,14 +211,24 @@ export const getRoute = async (
 export const searchLocations = async (query: string, focusPoint?: { lat: number, lng: number }): Promise<LocationSuggestion[]> => {
     if (!query || query.length < 3) return [];
     
-    let url = `${GEOCODE_API_URL}?api_key=${apiKey}&text=${encodeURIComponent(query)}`;
+    const params = new URLSearchParams({
+        text: query,
+    });
 
     if (focusPoint) {
-        url += `&focus.point.lon=${focusPoint.lng}&focus.point.lat=${focusPoint.lat}`;
+        params.append('focus.point.lon', focusPoint.lng.toString());
+        params.append('focus.point.lat', focusPoint.lat.toString());
     }
+    
+    const url = `${GEOCODE_API_URL}?${params.toString()}`;
 
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            headers: {
+                'Accept': 'application/json',
+                'Authorization': apiKey,
+            }
+        });
         if (!response.ok) {
             console.error('Error from OpenRouteService Geocode:', await response.text());
             throw new Error('Failed to fetch locations');
