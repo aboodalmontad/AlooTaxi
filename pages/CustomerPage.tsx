@@ -395,7 +395,7 @@ const CustomerPage: React.FC = () => {
         )}
         <InteractiveMap 
           center={startLocation ? [startLocation.lat, startLocation.lng] : provinceCenter}
-          userLocation={ride?.status === RideStatus.IN_PROGRESS ? driverLiveLocation ?? undefined : startLocation ?? undefined}
+          userLocation={startLocation ?? undefined}
           driverLocation={driverLiveLocation ?? undefined}
           startLocation={ride?.status !== RideStatus.IDLE ? ride?.startLocation : startLocation ?? undefined}
           endLocation={ride?.status !== RideStatus.IDLE ? ride?.endLocation : endLocation ?? undefined}

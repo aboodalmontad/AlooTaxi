@@ -147,10 +147,6 @@ const InteractiveMap: React.FC<InteractiveMapProps> & { DriverMarker: typeof Dri
       return null;
   }
   
-  const isUserAtStart = userLocation && startLocation && 
-    userLocation.lat.toFixed(5) === startLocation.lat.toFixed(5) && 
-    userLocation.lng.toFixed(5) === startLocation.lng.toFixed(5);
-  
   return (
     <MapContainer center={center} zoom={zoom} scrollWheelZoom={true} className="h-full w-full z-0">
       <TileLayer
@@ -158,32 +154,38 @@ const InteractiveMap: React.FC<InteractiveMapProps> & { DriverMarker: typeof Dri
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       
-      {startLocation && (
+      {/* The pulsating blue dot for the user's live location. Always show if available. */}
+      {userLocation && (
+        <Marker position={[userLocation.lat, userLocation.lng]} icon={userLocationIcon} >
+           <Popup>موقعك الحالي</Popup>
+        </Marker>
+      )}
+
+      {/* The 'A' marker for the route start. Only show when a destination is also set. */}
+      {startLocation && endLocation && (
         <Marker position={[startLocation.lat, startLocation.lng]} icon={startIcon}>
           <Popup>نقطة الانطلاق: {startLocation.name}</Popup>
         </Marker>
       )}
       
+      {/* The 'B' marker for the route end. */}
       {endLocation && (
         <Marker position={[endLocation.lat, endLocation.lng]} icon={endIcon}>
           <Popup>الوجهة: {endLocation.name}</Popup>
         </Marker>
       )}
-
-      {userLocation && !isUserAtStart && (
-        <Marker position={[userLocation.lat, userLocation.lng]} icon={userLocationIcon} >
-           <Popup>موقعك الحالي</Popup>
-        </Marker>
-      )}
       
+      {/* The orange taxi icon for the driver's live location. */}
       {driverLocation && (
         <Marker position={[driverLocation.lat, driverLocation.lng]} icon={driverIcon}>
           <Popup>موقع السائق</Popup>
         </Marker>
       )}
 
+      {/* For other markers passed as children, like in the admin live map */}
       {children}
 
+      {/* For drawing routes on the map */}
       {routes && routes.map((route, index) => (
         <React.Fragment key={index}>
           <Polyline 
@@ -201,6 +203,7 @@ const InteractiveMap: React.FC<InteractiveMapProps> & { DriverMarker: typeof Dri
         </React.Fragment>
       ))}
       
+      {/* Map view controllers */}
       {!disableAutoPanZoom && bounds.length > 1 && <FitBounds bounds={bounds} />}
       {!disableAutoPanZoom && (!bounds || bounds.length <= 1) && <MapUpdater center={center} zoom={zoom} />}
       {onCenterChange && <MapCenterHandler onCenterChange={onCenterChange} />}
