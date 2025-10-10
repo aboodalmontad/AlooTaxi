@@ -38,6 +38,7 @@ const CustomerPage: React.FC = () => {
   const [locationError, setLocationError] = useState<string | null>(null);
   const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(true);
+  const [isMapViewLocked, setIsMapViewLocked] = useState(true); // New state for map view control
   
   // --- START: New state for Pin Drop feature ---
   const [pinDropMode, setPinDropMode] = useState<'start' | 'end' | null>(null);
@@ -89,6 +90,7 @@ const CustomerPage: React.FC = () => {
           setLocationWarning(null);
           setLocationError(null);
           setIsLocating(false);
+          setIsMapViewLocked(true); // Re-lock view on location fetch
       };
 
       const handleError = (error: GeolocationPositionError) => {
@@ -153,6 +155,7 @@ const CustomerPage: React.FC = () => {
       setSelectedVehicle(null);
       setIsScheduling(false);
       setScheduledTime('');
+      setIsMapViewLocked(true); // Reset map lock
   }, []);
 
 
@@ -196,6 +199,13 @@ const CustomerPage: React.FC = () => {
     prevRideRef.current = ride;
   }, [ride, resetJourney]);
 
+  // Effect to re-lock map view when a new ride is requested
+  useEffect(() => {
+    if (ride && prevRideRef.current?.status !== ride.status) {
+        setIsMapViewLocked(true);
+    }
+  }, [ride]);
+
 
   // Effect for fetching start location suggestions
   useEffect(() => {
@@ -234,6 +244,7 @@ const CustomerPage: React.FC = () => {
                 const route = await getRoute(startLocation, endLocation);
                 setRouteInfo(route);
                 setCurrentStep('selectVehicle');
+                setIsMapViewLocked(true); // Re-lock view to show the new route
             } catch (error) {
                 if (error instanceof Error) {
                     setRouteError(error.message);
@@ -329,6 +340,9 @@ const CustomerPage: React.FC = () => {
   const userProvince = user?.province || SyrianProvinces.DAMASCUS;
   const provinceCenter = PROVINCE_COORDS[userProvince] || DAMASCUS_COORDS;
 
+  const mainPolyline = ride?.polyline || routeInfo?.polyline;
+  const mapRoutes = mainPolyline ? [{ polyline: mainPolyline, color: '#3b82f6' }] : undefined;
+
   return (
     <div className="h-screen w-screen flex flex-col relative overflow-hidden">
       <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-30">
@@ -362,15 +376,27 @@ const CustomerPage: React.FC = () => {
       )}
 
       <div className="flex-grow relative">
+        {/* Recenter button for customer map */}
+        {!isMapViewLocked && (
+            <button
+                onClick={() => setIsMapViewLocked(true)}
+                className="absolute top-24 right-4 w-12 h-12 bg-slate-800/80 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl hover:bg-slate-700 z-10 shadow-lg"
+                aria-label="إعادة ضبط عرض الخريطة"
+                title="إعادة ضبط عرض الخريطة"
+            >
+                🖼️
+            </button>
+        )}
         <InteractiveMap 
           center={startLocation ? [startLocation.lat, startLocation.lng] : provinceCenter}
           userLocation={ride?.status === RideStatus.IN_PROGRESS ? driverLiveLocation ?? undefined : startLocation ?? undefined}
           driverLocation={driverLiveLocation ?? undefined}
           startLocation={ride?.status !== RideStatus.IDLE ? ride?.startLocation : startLocation ?? undefined}
           endLocation={ride?.status !== RideStatus.IDLE ? ride?.endLocation : endLocation ?? undefined}
-          routePolyline={ride?.polyline || routeInfo?.polyline}
+          routes={mapRoutes}
           onCenterChange={setMapCenter}
-          disableAutoPanZoom={!!pinDropMode}
+          disableAutoPanZoom={!isMapViewLocked || !!pinDropMode}
+          onUserInteraction={() => setIsMapViewLocked(false)}
         />
       </div>
 

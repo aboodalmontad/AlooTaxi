@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
-import InteractiveMap from '../components/InteractiveMap';
+import InteractiveMap, { RouteStyle } from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
 import { RideStatus, Driver, RouteInfo, Ride, SyrianProvinces } from '../types';
 import { getRoute, getHaversineDistance } from '../services/mapService';
@@ -12,7 +12,7 @@ const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
   const { ride, acceptRide, rejectRide, completeRide, updateRideStatus, updateDriverLocation, liveTripData } = useRide();
   const [isOnline, setIsOnline] = useState(true);
-  const [displayPolyline, setDisplayPolyline] = useState<[number, number][] | undefined>(undefined);
+  const [routeLegs, setRouteLegs] = useState<RouteStyle[]>([]);
   const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number } | null>(null);
   const [pickupRouteInfo, setPickupRouteInfo] = useState<RouteInfo | null>(null);
   const [currentLegInfo, setCurrentLegInfo] = useState<RouteInfo | null>(null);
@@ -120,9 +120,6 @@ const DriverPage: React.FC = () => {
     setIsMapLocked(true); // Re-enable "follow me" mode
   };
 
-
-  // --- START: Improved Real-Time Location Tracking ---
-  // Memoized callbacks for the tracking hook to prevent unnecessary re-renders.
   const handleLocationUpdate = useCallback((position: GeolocationPosition) => {
       const { latitude, longitude } = position.coords;
       const newLocation = {
@@ -131,7 +128,7 @@ const DriverPage: React.FC = () => {
       };
       setDriverLocation(newLocation);
       updateDriverLocation(newLocation);
-      setLocationError(null); // Clear previous errors on successful update
+      setLocationError(null);
       setLocationWarning(null);
   }, [updateDriverLocation]);
 
@@ -140,7 +137,7 @@ const DriverPage: React.FC = () => {
       switch (err.code) {
           case err.PERMISSION_DENIED:
               message = "تم رفض إذن الموقع. تم إيقاف التتبع المباشر.";
-              setIsOnline(false); // Force offline if permission is revoked
+              setIsOnline(false);
               break;
           case err.POSITION_UNAVAILABLE:
               message = "إشارة GPS ضعيفة. جاري محاولة إعادة الاتصال...";
@@ -155,16 +152,11 @@ const DriverPage: React.FC = () => {
       setLocationError(message);
   }, []);
 
-  // Use the custom hook to manage location tracking.
-  // It only starts tracking when the driver is online and has an initial location.
   useDriverTracking(isOnline && !!driverLocation, {
     onSuccess: handleLocationUpdate,
     onError: handleLocationError,
   });
-  // --- END: Improved Real-Time Location Tracking ---
 
-
-  // Effect to calculate route to pickup point for new requests
   useEffect(() => {
     setIsCurrentRideTooFar(false);
     
@@ -196,62 +188,70 @@ const DriverPage: React.FC = () => {
 
   // Effect to calculate and display route for active trip stages
   useEffect(() => {
-    const calculateAndSetRoute = async () => {
-      if (!ride || !driverLocation) {
-        setDisplayPolyline(undefined);
-        setRouteError(null);
-        return;
-      }
-
-      try {
-        setRouteError(null);
-        let destination;
-        if (ride.status === RideStatus.PICKING_UP) {
-          destination = ride.startLocation;
-        } else if (ride.status === RideStatus.IN_PROGRESS) {
-          destination = ride.endLocation;
-        } else {
-          setDisplayPolyline(undefined);
-          return;
-        }
-
-        const distanceToDestination = getHaversineDistance(driverLocation, destination);
-        const MAX_ROUTE_DISTANCE_KM = 200;
-        if (distanceToDestination > MAX_ROUTE_DISTANCE_KM) {
-            const errorMsg = `المسافة إلى الوجهة (${Math.round(distanceToDestination)} كم) كبيرة جداً، تم إلغاء حساب المسار.`;
-            console.error(`Live route calculation aborted due to excessive distance: ${distanceToDestination.toFixed(1)}km.`);
-            setRouteError(errorMsg);
-            setDisplayPolyline(undefined);
+    const calculateAndSetRoutes = async () => {
+        if (!ride || !driverLocation) {
+            setRouteLegs([]);
+            setRouteError(null);
             return;
         }
 
-        const route = await getRoute(driverLocation, destination);
-        setDisplayPolyline(route.polyline);
+        try {
+            setRouteError(null);
+            const newRouteLegs: RouteStyle[] = [];
 
-      } catch(error) {
-        console.error("Driver route calculation failed:", error);
-        setDisplayPolyline(undefined);
-        if (error instanceof Error) {
-            setRouteError(`فشل حساب المسار: ${error.message}`);
-        } else {
-            setRouteError("فشل حساب المسار لسبب غير معروف.");
+            if (ride.status === RideStatus.PICKING_UP) {
+                // Leg 1: Driver to pickup (live, blue)
+                const pickupRoute = await getRoute(driverLocation, ride.startLocation);
+                newRouteLegs.push({
+                    polyline: pickupRoute.polyline,
+                    color: '#3b82f6',
+                    casingColor: '#022c7a',
+                });
+
+                // Leg 2: Pickup to destination (upcoming, purple)
+                if (ride.polyline) {
+                    newRouteLegs.push({
+                        polyline: ride.polyline,
+                        color: '#8b5cf6',
+                        casingColor: '#4c1d95',
+                        opacity: 0.75
+                    });
+                }
+            } else if (ride.status === RideStatus.IN_PROGRESS) {
+                // Main Leg: Driver to destination (live, blue)
+                const dropoffRoute = await getRoute(driverLocation, ride.endLocation);
+                newRouteLegs.push({
+                    polyline: dropoffRoute.polyline,
+                    color: '#3b82f6',
+                    casingColor: '#022c7a',
+                });
+            } else {
+                setRouteLegs([]);
+                return;
+            }
+
+            setRouteLegs(newRouteLegs);
+
+        } catch (error) {
+            console.error("Driver route calculation failed:", error);
+            setRouteLegs([]);
+            const errorMessage = error instanceof Error ? `فشل حساب المسار: ${error.message}` : "فشل حساب المسار لسبب غير معروف.";
+            setRouteError(errorMessage);
         }
-      }
     };
 
     if (routeCalculationTimeoutRef.current) {
-      clearTimeout(routeCalculationTimeoutRef.current);
+        clearTimeout(routeCalculationTimeoutRef.current);
     }
-    routeCalculationTimeoutRef.current = window.setTimeout(calculateAndSetRoute, 1500);
+    routeCalculationTimeoutRef.current = window.setTimeout(calculateAndSetRoutes, 1500);
 
     return () => {
-      if (routeCalculationTimeoutRef.current) {
-        clearTimeout(routeCalculationTimeoutRef.current);
-      }
+        if (routeCalculationTimeoutRef.current) {
+            clearTimeout(routeCalculationTimeoutRef.current);
+        }
     };
-  }, [ride?.status, driverLocation, ride?.startLocation, ride?.endLocation]);
+  }, [ride?.status, driverLocation, ride?.startLocation, ride?.endLocation, ride?.polyline]);
 
-  // Effect to calculate dynamic route info for the current leg of the journey
   useEffect(() => {
     if (!ride || !driverLocation || !isOnline) {
       setCurrentLegInfo(null);
@@ -296,8 +296,6 @@ const DriverPage: React.FC = () => {
     
   }, [ride?.status, driverLocation, isOnline, ride?.startLocation, ride?.endLocation, routeError]);
 
-
-  // Effect to handle trip completion feedback
   useEffect(() => {
     if (ride?.status === RideStatus.COMPLETED) {
         setLastCompletedRide(ride);
@@ -543,7 +541,7 @@ const DriverPage: React.FC = () => {
               userLocation={driverLocation}
               startLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.startLocation : undefined}
               endLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.endLocation : undefined}
-              routePolyline={displayPolyline}
+              routes={routeLegs}
               disableAutoPanZoom={!isMapLocked}
               onUserInteraction={() => setIsMapLocked(false)}
           />

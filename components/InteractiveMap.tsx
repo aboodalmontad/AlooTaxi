@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, ReactNode } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet';
-import L, { LatLngExpression, LeafletMouseEvent, LatLngBoundsExpression } from 'leaflet';
+import L, { LatLngBoundsExpression, LatLngTuple } from 'leaflet';
 import { DAMASCUS_COORDS } from '../constants';
 
 // --- Custom Icons ---
@@ -38,7 +38,7 @@ const userLocationIcon = new L.DivIcon({
 // --- End Custom Icons ---
 
 interface MapUpdaterProps {
-  center: LatLngExpression;
+  center: [number, number];
   zoom: number;
 }
 
@@ -51,7 +51,6 @@ const MapUpdater: React.FC<MapUpdaterProps> = ({ center, zoom }) => {
     return null;
 };
 
-// --- START: Component for Pin Drop feature ---
 const MapCenterHandler: React.FC<{ onCenterChange?: (center: { lat: number; lng: number }) => void }> = ({ onCenterChange }) => {
     const map = useMapEvents({
         moveend: () => {
@@ -60,7 +59,7 @@ const MapCenterHandler: React.FC<{ onCenterChange?: (center: { lat: number; lng:
                 onCenterChange({ lat: center.lat, lng: center.lng });
             }
         },
-        load: () => { // Also fire on initial load to get starting center
+        load: () => {
             if (onCenterChange) {
                 const center = map.getCenter();
                 onCenterChange({ lat: center.lat, lng: center.lng });
@@ -69,22 +68,29 @@ const MapCenterHandler: React.FC<{ onCenterChange?: (center: { lat: number; lng:
     });
     return null;
 };
-// --- END: Component ---
 
-// --- START: Component to detect user interaction ---
 const MapInteractionHandler: React.FC<{ onUserInteraction: () => void }> = ({ onUserInteraction }) => {
     useMapEvents({
-        dragstart: () => {
-            onUserInteraction();
-        },
-        zoomstart: () => {
-            onUserInteraction();
-        },
+        dragstart: () => onUserInteraction(),
+        zoomstart: () => onUserInteraction(),
     });
     return null;
 };
-// --- END: Component ---
 
+export interface RouteStyle {
+  polyline: [number, number][];
+  color: string;
+  casingColor?: string;
+  weight?: number;
+  opacity?: number;
+}
+
+// Marker Components for external use
+const DriverMarker: React.FC<{ position: LatLngTuple; popupContent: string | ReactNode }> = ({ position, popupContent }) => (
+    <Marker position={position} icon={driverIcon}>
+        <Popup>{popupContent}</Popup>
+    </Marker>
+);
 
 interface InteractiveMapProps {
   center?: [number, number];
@@ -93,28 +99,42 @@ interface InteractiveMapProps {
   endLocation?: { lat: number; lng: number; name:string };
   userLocation?: { lat: number; lng: number; };
   driverLocation?: { lat: number; lng: number; };
-  routePolyline?: [number, number][];
-  onCenterChange?: (center: { lat: number; lng: number }) => void; // Prop for Pin Drop
+  routes?: RouteStyle[];
+  onCenterChange?: (center: { lat: number; lng: number }) => void;
   disableAutoPanZoom?: boolean;
   onUserInteraction?: () => void;
+  children?: ReactNode; // To allow passing markers as children
 }
 
-const InteractiveMap: React.FC<InteractiveMapProps> = ({
+const InteractiveMap: React.FC<InteractiveMapProps> & { DriverMarker: typeof DriverMarker } = ({
   center = DAMASCUS_COORDS,
   zoom = 13,
   startLocation,
   endLocation,
   userLocation,
   driverLocation,
-  routePolyline,
+  routes,
   onCenterChange,
   disableAutoPanZoom = false,
   onUserInteraction,
+  children,
 }) => {
+  const driverMarkerChildren = React.Children.toArray(children).filter(child =>
+    React.isValidElement(child) && child.type === DriverMarker
+  );
 
-  const bounds = routePolyline && routePolyline.length > 0
-    ? routePolyline
+  const driverMarkerPositions = driverMarkerChildren.map(child =>
+    (React.isValidElement(child) ? child.props.position : null)
+  ).filter(Boolean);
+
+  const bounds = routes && routes.length > 0
+    ? routes.flatMap(r => r.polyline)
     : [startLocation, endLocation, userLocation, driverLocation].filter(Boolean).map(loc => [loc!.lat, loc!.lng] as [number, number]);
+
+  // Add children marker positions to bounds calculation
+  if(driverMarkerPositions.length > 0) {
+      bounds.push(...driverMarkerPositions);
+  }
 
   const FitBounds: React.FC<{ bounds: LatLngBoundsExpression }> = ({ bounds }) => {
       const map = useMap();
@@ -162,14 +182,24 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
         </Marker>
       )}
 
-      {routePolyline && routePolyline.length > 0 && (
-        <>
-          {/* Casing for the polyline to make it stand out */}
-          <Polyline positions={routePolyline} color="#022c7a" weight={9} opacity={0.8} />
-          {/* Main polyline */}
-          <Polyline positions={routePolyline} color="#3b82f6" weight={6} opacity={0.9} />
-        </>
-      )}
+      {children}
+
+      {routes && routes.map((route, index) => (
+        <React.Fragment key={index}>
+          <Polyline 
+            positions={route.polyline} 
+            color={route.casingColor || '#022c7a'} 
+            weight={route.weight ? route.weight + 3 : 9} 
+            opacity={route.opacity ? route.opacity * 0.8 : 0.8} 
+          />
+          <Polyline 
+            positions={route.polyline} 
+            color={route.color} 
+            weight={route.weight || 6} 
+            opacity={route.opacity || 0.9} 
+          />
+        </React.Fragment>
+      ))}
       
       {!disableAutoPanZoom && bounds.length > 1 && <FitBounds bounds={bounds} />}
       {!disableAutoPanZoom && (!bounds || bounds.length <= 1) && <MapUpdater center={center} zoom={zoom} />}
@@ -178,5 +208,7 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
     </MapContainer>
   );
 };
+
+InteractiveMap.DriverMarker = DriverMarker;
 
 export default InteractiveMap;

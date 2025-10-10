@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
-import { PricingSettings, VehicleType, DriverPayment, Ride, RideStatus } from '../types';
-import { VEHICLE_TYPES } from '../constants';
+import { PricingSettings, VehicleType, DriverPayment, Ride, RideStatus, SyrianProvinces } from '../types';
+import { DAMASCUS_COORDS, VEHICLE_TYPES } from '../constants';
 import { useApi } from '../App';
+import InteractiveMap, { RouteStyle } from '../components/InteractiveMap';
 
 const AdminPage: React.FC = () => {
     const { user, logout } = useAuth();
@@ -15,7 +16,7 @@ const AdminPage: React.FC = () => {
             case 'drivers': return <DriverManagement />;
             case 'accounting': return <DriverAccounting />;
             case 'apiKeys': return <ApiKeysManagement />;
-            case 'liveMap': return <div className="text-center"><h2 className="text-2xl">الخريطة الحية (قيد التطوير)</h2><p>ستعرض هذه الشاشة جميع السائقين والرحلات الحالية.</p></div>;
+            case 'liveMap': return <LiveMapView />;
             case 'reports': return <ReportsManagement />;
             default: return <DriverManagement />;
         }
@@ -26,10 +27,10 @@ const AdminPage: React.FC = () => {
             <aside className="w-64 bg-slate-800 p-4 flex flex-col shadow-lg">
                 <h1 className="text-3xl font-bold text-primary mb-8 text-center">ألو تكسي</h1>
                 <nav className="flex flex-col space-y-2">
-                    <button onClick={() => setActiveTab('pricing')} className={`p-2 text-right rounded ${activeTab === 'pricing' ? 'bg-primary' : 'hover:bg-slate-700'}`}>إدارة التسعير</button>
-                    <button onClick={() => setActiveTab('drivers')} className={`p-2 text-right rounded ${activeTab === 'drivers' ? 'bg-primary' : 'hover:bg-slate-700'}`}>إدارة السائقين</button>
-                    <button onClick={() => setActiveTab('accounting')} className={`p-2 text-right rounded ${activeTab === 'accounting' ? 'bg-primary' : 'hover:bg-slate-700'}`}>محاسبة السائقين</button>
                     <button onClick={() => setActiveTab('liveMap')} className={`p-2 text-right rounded ${activeTab === 'liveMap' ? 'bg-primary' : 'hover:bg-slate-700'}`}>الخريطة الحية</button>
+                    <button onClick={() => setActiveTab('drivers')} className={`p-2 text-right rounded ${activeTab === 'drivers' ? 'bg-primary' : 'hover:bg-slate-700'}`}>إدارة السائقين</button>
+                    <button onClick={() => setActiveTab('pricing')} className={`p-2 text-right rounded ${activeTab === 'pricing' ? 'bg-primary' : 'hover:bg-slate-700'}`}>إدارة التسعير</button>
+                    <button onClick={() => setActiveTab('accounting')} className={`p-2 text-right rounded ${activeTab === 'accounting' ? 'bg-primary' : 'hover:bg-slate-700'}`}>محاسبة السائقين</button>
                     <button onClick={() => setActiveTab('reports')} className={`p-2 text-right rounded ${activeTab === 'reports' ? 'bg-primary' : 'hover:bg-slate-700'}`}>التقارير</button>
                     <button onClick={() => setActiveTab('apiKeys')} className={`p-2 text-right rounded ${activeTab === 'apiKeys' ? 'bg-primary' : 'hover:bg-slate-700'}`}>مفاتيح API</button>
                 </nav>
@@ -180,6 +181,8 @@ interface DriverData {
     vehicleType: VehicleType;
     isOnline: boolean;
     isBlocked: boolean;
+    // Add location for live map
+    location?: { lat: number, lng: number };
     performance: {
         totalRides: number;
         averageRating: number;
@@ -188,9 +191,9 @@ interface DriverData {
     };
 }
 const initialDrivers: DriverData[] = [
-    { id: 'driv1', name: 'سامر السائق', phone: '0987654321', vehicleType: VehicleType.AC_CAR, isOnline: true, isBlocked: false, performance: { totalRides: 152, averageRating: 4.8, totalEarnings: 1850000, weeklyRides: [15, 14, 8, 10, 12, 18, 5] } },
+    { id: 'driv1', name: 'سامر السائق', phone: '0987654321', vehicleType: VehicleType.AC_CAR, isOnline: true, isBlocked: false, location: { lat: 33.515, lng: 36.278 }, performance: { totalRides: 152, averageRating: 4.8, totalEarnings: 1850000, weeklyRides: [15, 14, 8, 10, 12, 18, 5] } },
     { id: 'driv4', name: 'محمد الأحمد', phone: '0911111111', vehicleType: VehicleType.NORMAL_CAR, isOnline: false, isBlocked: false, performance: { totalRides: 89, averageRating: 4.5, totalEarnings: 980000, weeklyRides: [0, 0, 10, 9, 11, 14, 12] } },
-    { id: 'driv5', name: 'خالد المصري', phone: '0922222222', vehicleType: VehicleType.VIP, isOnline: true, isBlocked: false, performance: { totalRides: 45, averageRating: 4.9, totalEarnings: 2500000, weeklyRides: [2, 3, 1, 4, 3, 5, 4] } },
+    { id: 'driv5', name: 'خالد المصري', phone: '0922222222', vehicleType: VehicleType.VIP, isOnline: true, isBlocked: false, location: { lat: 33.500, lng: 36.300 }, performance: { totalRides: 45, averageRating: 4.9, totalEarnings: 2500000, weeklyRides: [2, 3, 1, 4, 3, 5, 4] } },
     { id: 'driv6', name: 'لينا الحسن', phone: '0933333333', vehicleType: VehicleType.MOTORCYCLE, isOnline: false, isBlocked: true, performance: { totalRides: 210, averageRating: 4.2, totalEarnings: 1200000, weeklyRides: [20, 18, 22, 15, 10, 0, 0] } },
 ];
 
@@ -564,5 +567,108 @@ const ApiKeysManagement: React.FC = () => {
         </div>
     );
 };
+
+
+// --- Live Map View ---
+const mockActiveRides: Ride[] = [
+    {
+        id: 'activeride_1',
+        status: RideStatus.PICKING_UP,
+        driverId: 'driv1',
+        startLocation: { lat: 33.5138, lng: 36.2765, name: "ساحة المرجة" },
+        endLocation: { lat: 33.522, lng: 36.29, name: "كلية الطب" },
+        polyline: [[33.5138, 36.2765], [33.515, 36.28], [33.522, 36.29]],
+    } as Ride,
+    {
+        id: 'activeride_2',
+        status: RideStatus.IN_PROGRESS,
+        driverId: 'driv5',
+        startLocation: { lat: 33.505, lng: 36.295, name: "فندق الشام" },
+        endLocation: { lat: 33.49, lng: 36.25, name: "كفرسوسة" },
+        polyline: [[33.505, 36.295], [33.500, 36.28], [33.49, 36.25]],
+    } as Ride,
+];
+
+
+const LiveMapView: React.FC = () => {
+    const [drivers, setDrivers] = useState<DriverData[]>(initialDrivers);
+    const [rides] = useState<Ride[]>(mockActiveRides);
+    const [isAutoFitEnabled, setIsAutoFitEnabled] = useState(true);
+
+    // Simulate driver movement
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setDrivers(prevDrivers =>
+                prevDrivers.map(driver => {
+                    if (driver.isOnline && driver.location) {
+                        return {
+                            ...driver,
+                            location: {
+                                lat: driver.location.lat + (Math.random() - 0.5) * 0.001,
+                                lng: driver.location.lng + (Math.random() - 0.5) * 0.001,
+                            },
+                        };
+                    }
+                    return driver;
+                })
+            );
+        }, 3000); // Update every 3 seconds
+
+        return () => clearInterval(interval);
+    }, []);
+
+    const onlineDrivers = drivers.filter(d => d.isOnline && d.location);
+    const routes: RouteStyle[] = rides.map(ride => ({
+        polyline: ride.polyline,
+        color: ride.status === RideStatus.PICKING_UP ? '#8b5cf6' : '#3b82f6', // Purple for pickup, Blue for in-progress
+        weight: 5,
+    }));
+
+    return (
+        <div className="h-full w-full flex flex-col relative">
+            <h2 className="text-2xl font-bold mb-4">الخريطة الحية للمركبات والرحلات</h2>
+            <div className="flex-grow relative rounded-lg overflow-hidden shadow-lg">
+                 {!isAutoFitEnabled && (
+                    <button
+                        onClick={() => setIsAutoFitEnabled(true)}
+                        className="absolute top-4 right-4 w-12 h-12 bg-slate-800/80 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl hover:bg-slate-700 z-10 shadow-lg"
+                        aria-label="إعادة ضبط عرض الخريطة"
+                        title="إعادة ضبط عرض الخريطة"
+                    >
+                        🔄
+                    </button>
+                )}
+                <InteractiveMap
+                    center={DAMASCUS_COORDS}
+                    zoom={12}
+                    routes={routes}
+                    onUserInteraction={() => setIsAutoFitEnabled(false)}
+                    disableAutoPanZoom={!isAutoFitEnabled}
+                >
+                    {onlineDrivers.map(driver => (
+                         <InteractiveMap.DriverMarker
+                            key={driver.id}
+                            position={[driver.location!.lat, driver.location!.lng]}
+                            popupContent={`
+                                <strong>${driver.name}</strong><br/>
+                                الحالة: ${driver.isOnline ? 'متصل' : 'غير متصل'}<br/>
+                                المركبة: ${VEHICLE_TYPES.find(v => v.id === driver.vehicleType)?.ar || ''}
+                            `}
+                         />
+                    ))}
+                </InteractiveMap>
+            </div>
+             <div className="flex items-center justify-center mt-4 gap-6 text-sm">
+                <div className="flex items-center gap-2"><div className="w-8 h-1 bg-[#3b82f6]"></div><span>رحلة جارية</span></div>
+                <div className="flex items-center gap-2"><div className="w-8 h-1 bg-[#8b5cf6]"></div><span>في الطريق للزبون</span></div>
+                <div className="flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="#f97316"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11C5.84 5 5.28 5.42 5.08 6.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5S18.33 16 17.5 16zM5 11l1.5-4.5h11L19 11H5z"/></svg>
+                    <span>سائق متصل</span>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 
 export default AdminPage;
