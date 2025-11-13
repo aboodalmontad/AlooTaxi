@@ -79,14 +79,33 @@
         .animate-fade-in-down { animation: fadeInDown 0.3s ease-out forwards; }
         .animate-fade-in-up { animation: fadeInUp 0.3s ease-out forwards; }
 
-        /* New styles for advanced navigation view */
+        /* Styles for 3D Navigation View */
+        .navigation-view {
+            perspective: 1200px;
+            transform-style: preserve-3d;
+        }
         .navigation-view .leaflet-map-pane {
-            transition: transform 0.5s ease-out;
-            transform: translateY(-25%);
+            transition: transform 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            transform: translateY(-15%) rotateX(55deg) scale(1.1);
+            transform-origin: bottom center;
         }
         .navigation-view .leaflet-control-container .leaflet-bottom {
-            transition: bottom 0.5s ease-out !important;
-            bottom: calc(25% + 10px) !important; /* Adjust to keep controls visible */
+            transition: bottom 0.8s ease-out !important;
+            bottom: calc(15% + 10px) !important;
+        }
+        /* Counter-rotate markers to make them stand upright on the tilted map */
+        .navigation-view .leaflet-marker-icon:not(.navigation-arrow-icon) {
+            transform: rotateX(-55deg) !important;
+            transform-origin: bottom center; /* Anchored markers pivot from their base */
+        }
+        /* Special styling for the user's navigation arrow to make it 'float' */
+        .navigation-view .navigation-arrow-icon {
+            transform: rotateX(-55deg) translateY(-10px) !important;
+            transform-origin: center center; /* Centered arrow pivots from its middle */
+            filter: drop-shadow(0 10px 5px rgba(0,0,0,0.3));
+        }
+        .navigation-arrow-icon svg {
+            display: block; /* Ensure SVG fits its container */
         }
     </style>
   <script type="importmap">

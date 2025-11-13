@@ -38,8 +38,9 @@ const userLocationIcon = new L.DivIcon({
     iconAnchor: [8, 8],
 });
 
-const navigationArrowIcon = new L.Icon({
-    iconUrl: `data:image/svg+xml;base64,${btoa(navigationArrowSvg)}`,
+const navigationArrowIcon = new L.DivIcon({
+    html: navigationArrowSvg,
+    className: 'navigation-arrow-icon',
     iconSize: [48, 48],
     iconAnchor: [24, 24],
 });
@@ -168,117 +169,97 @@ const InteractiveMap: React.FC<InteractiveMapProps> & { DriverMarker: typeof Dri
     return userLocationIcon; // Default for customer (blue dot)
   };
 
-  const driverMarkerChildren = React.Children.toArray(children).filter(child =>
-    React.isValidElement(child) && child.type === DriverMarker
-  );
+  const mapRef = useRef<L.Map>(null);
 
-  const driverMarkerPositions = driverMarkerChildren.map(child =>
-    (React.isValidElement(child) ? child.props.position : null)
-  ).filter(Boolean);
+  useEffect(() => {
+    if (disableAutoPanZoom || !mapRef.current) return;
 
-  const bounds = routes && routes.length > 0
-    ? routes.flatMap(r => r.polyline)
-    : [startLocation, endLocation, userLocation, driverLocation].filter(Boolean).map(loc => [loc!.lat, loc!.lng] as [number, number]);
+    const bounds = new L.LatLngBounds([]);
+    if (startLocation) bounds.extend([startLocation.lat, startLocation.lng]);
+    if (endLocation) bounds.extend([endLocation.lat, endLocation.lng]);
+    if (userLocation) bounds.extend([userLocation.lat, userLocation.lng]);
+    if (driverLocation) bounds.extend([driverLocation.lat, driverLocation.lng]);
 
-  // Add children marker positions to bounds calculation
-  if(driverMarkerPositions.length > 0) {
-      bounds.push(...driverMarkerPositions);
-  }
-
-  const FitBounds: React.FC<{ bounds: LatLngBoundsExpression }> = ({ bounds }) => {
-      const map = useMap();
-      useEffect(() => {
-          if (bounds && Array.isArray(bounds) && bounds.length > 0) {
-              map.invalidateSize();
-              map.fitBounds(bounds, { padding: [50, 50] });
-              if ((map as any).setBearing) {
-                (map as any).setBearing(0);
-              }
-          }
-      }, [bounds, map]);
-      return null;
-  }
-  
-  const rotationOptions = {
-    rotate: true,
-    touchRotate: true,
-    rotateControl: {
-      position: 'topleft'
+    if (routes) {
+        routes.forEach(route => {
+            if (route.polyline) {
+                route.polyline.forEach(point => bounds.extend(point));
+            }
+        });
     }
-  };
+
+    if (bounds.isValid()) {
+      mapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+    }
+  }, [startLocation, endLocation, userLocation, driverLocation, routes, disableAutoPanZoom]);
+
 
   return (
-    <MapContainer 
-        center={center} 
-        zoom={zoom} 
-        scrollWheelZoom={true} 
-        className={`h-full w-full z-0 ${isNavigating ? 'navigation-view' : ''}`}
-        {...rotationOptions as any}
+    <MapContainer
+      ref={mapRef}
+      center={center}
+      zoom={zoom}
+      style={{ height: '100%', width: '100%', zIndex: 0 }}
+      scrollWheelZoom={true}
+      className="interactive-map"
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       
-      {userLocation && (
-        <Marker position={[userLocation.lat, userLocation.lng]} icon={determineUserIcon()} zIndexOffset={1000} >
-           <Popup>موقعك الحالي</Popup>
-        </Marker>
-      )}
-
-      {/* The 'A' marker for the route start. Only show when a destination is also set. */}
-      {startLocation && endLocation && (
-        <Marker position={[startLocation.lat, startLocation.lng]} icon={startIcon}>
-          <Popup>نقطة الانطلاق: {startLocation.name}</Popup>
-        </Marker>
-      )}
-      
-      {/* The 'B' marker for the route end. */}
-      {endLocation && (
-        <Marker position={[endLocation.lat, endLocation.lng]} icon={endIcon}>
-          <Popup>الوجهة: {endLocation.name}</Popup>
-        </Marker>
-      )}
-      
-      {/* The orange taxi icon for the driver's live location. */}
-      {driverLocation && (
-        <Marker position={[driverLocation.lat, driverLocation.lng]} icon={driverIcon}>
-          <Popup>موقع السائق</Popup>
-        </Marker>
-      )}
-
-      {/* For other markers passed as children, like in the admin live map */}
-      {children}
-
-      {/* For drawing routes on the map */}
-      {routes && routes.map((route, index) => (
-        <React.Fragment key={index}>
-          <Polyline 
-            positions={route.polyline} 
-            color={route.casingColor || '#022c7a'} 
-            weight={route.weight ? route.weight + 3 : 9} 
-            opacity={route.opacity ? route.opacity * 0.8 : 0.8} 
-          />
-          <Polyline 
-            positions={route.polyline} 
-            color={route.color} 
-            weight={route.weight || 6} 
-            opacity={route.opacity || 0.9} 
-          />
-        </React.Fragment>
-      ))}
-      
-      {/* Map view controllers */}
-      {isNavigating && userLocation ? (
-          <NavigationUpdater center={[userLocation.lat, userLocation.lng]} bearing={navigationMode.bearing} />
-      ) : (
-        <>
-            {!disableAutoPanZoom && bounds.length > 1 && <FitBounds bounds={bounds} />}
-            {!disableAutoPanZoom && (!bounds || bounds.length <= 1) && <MapUpdater center={center} zoom={zoom} />}
-        </>
-      )}
+      {!disableAutoPanZoom && !isNavigating && <MapUpdater center={center} zoom={zoom} />}
+      {isNavigating && navigationMode?.bearing !== undefined && userLocation &&
+        <NavigationUpdater center={[userLocation.lat, userLocation.lng]} bearing={navigationMode.bearing} />
+      }
       {onCenterChange && <MapCenterHandler onCenterChange={onCenterChange} />}
       {onUserInteraction && <MapInteractionHandler onUserInteraction={onUserInteraction} />}
+      
+      {startLocation && (
+        <Marker position={[startLocation.lat, startLocation.lng]} icon={startIcon}>
+          <Popup>{startLocation.name}</Popup>
+        </Marker>
+      )}
+      {endLocation && (
+        <Marker position={[endLocation.lat, endLocation.lng]} icon={endIcon}>
+          <Popup>{endLocation.name}</Popup>
+        </Marker>
+      )}
+
+      {userLocation && (
+          <Marker position={[userLocation.lat, userLocation.lng]} icon={determineUserIcon()} />
+      )}
+      
+      {driverLocation && (
+        <Marker position={[driverLocation.lat, driverLocation.lng]} icon={idleDriverIcon} />
+      )}
+
+      {routes && routes.map((route, index) => (
+          <React.Fragment key={index}>
+              {route.casingColor && route.polyline && (
+                  <Polyline
+                      positions={route.polyline}
+                      pathOptions={{
+                          color: route.casingColor,
+                          weight: (route.weight || 6) + 4,
+                          opacity: route.opacity,
+                      }}
+                  />
+              )}
+               {route.polyline && (
+                    <Polyline
+                        positions={route.polyline}
+                        pathOptions={{
+                            color: route.color,
+                            weight: route.weight || 6,
+                            opacity: route.opacity,
+                        }}
+                    />
+               )}
+          </React.Fragment>
+      ))}
+      
+      {children}
     </MapContainer>
   );
 };

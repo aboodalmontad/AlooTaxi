@@ -39,25 +39,25 @@ const LiveTripDisplay: React.FC<LiveTripDisplayProps> = ({
                 <p className="text-lg md:text-base lg:text-lg text-slate-200 uppercase drop-shadow-lg">المسافة</p>
                 {/*
                   Styling for the numbers:
-                  - text-red-500: Changed color to red as requested.
+                  - text-white: Changed color from red to white for better aesthetics.
                   - font-sans: Switched from mono to a more readable sans-serif font.
                   - text-6xl...: Made the font huge and responsive for all screen sizes.
                   - drop-shadow-xl: Added a crisp shadow for better readability against the map.
                 */}
-                <p className="text-red-500 text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
+                <p className="text-white text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
                     {distanceTraveled.toFixed(2)}
                     <span className="text-2xl lg:text-3xl ml-1">كم</span>
                 </p>
             </div>
             <div className="px-2">
                 <p className="text-lg md:text-base lg:text-lg text-slate-200 uppercase drop-shadow-lg">الزمن</p>
-                <p className="text-red-500 text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
+                <p className="text-white text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
                     {formatTime(timeElapsed)}
                 </p>
             </div>
             <div className="px-2">
                 <p className="text-lg md:text-base lg:text-lg text-slate-200 uppercase drop-shadow-lg">الأجرة</p>
-                <p className="text-red-500 text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
+                <p className="text-white text-6xl md:text-5xl lg:text-7xl font-sans font-bold tracking-tight drop-shadow-xl">
                     {currentFare.toLocaleString('ar-SY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                     <span className="text-2xl lg:text-3xl ml-1">ل.س</span>
                 </p>

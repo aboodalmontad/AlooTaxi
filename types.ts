@@ -56,6 +56,7 @@ export interface Driver extends User {
   };
   rating: number;
   isOnline: boolean;
+  location?: { lat: number; lng: number; heading: number | null };
 }
 
 export interface Customer extends User {}

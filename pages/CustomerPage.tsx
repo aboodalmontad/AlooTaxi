@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
 import InteractiveMap from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
-import { RideStatus, RouteInfo, VehicleType, LocationSuggestion, Ride, SyrianProvinces } from '../types';
+import { RideStatus, RouteInfo, VehicleType, LocationSuggestion, Ride, SyrianProvinces, Driver } from '../types';
 import { getRoute, searchLocations, getHaversineDistance } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
 import NavigationUI from '../components/NavigationUI';
@@ -26,14 +26,13 @@ type MapViewMode = 'free' | 'locked' | 'navigation';
 
 const CustomerPage: React.FC = () => {
   const { user, logout } = useAuth();
-  const { ride, requestRide, cancelRide, getEstimatedFare, driverLiveLocation, liveTripData } = useRide();
+  const { currentRide, requestRide, cancelRide, getEstimatedFare, onlineDrivers, liveTripData } = useRide();
   
   // Location and Route State
   const [startLocation, setStartLocation] = useState<{ lat: number; lng: number; name: string; heading: number | null } | null>(null);
   const [endLocation, setEndLocation] = useState<{ lat: number; lng: number; name: string } | null>(null);
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
   const [navigationRoute, setNavigationRoute] = useState<RouteInfo | null>(null);
-  const [legProgress, setLegProgress] = useState<RouteInfo | null>(null);
 
   
   // UI and Flow State
@@ -73,6 +72,13 @@ const CustomerPage: React.FC = () => {
       lat: PROVINCE_COORDS[userProvince][0],
       lng: PROVINCE_COORDS[userProvince][1]
   }), [userProvince]);
+
+  const assignedDriver = useMemo<Driver | null>(() => {
+    if (currentRide && currentRide.driverId) {
+        return onlineDrivers.find(d => d.id === currentRide.driverId) || null;
+    }
+    return null;
+  }, [currentRide, onlineDrivers]);
 
   const fetchUserLocation = useCallback((isManualRequest = false) => {
     setStartLocation(null);
@@ -175,7 +181,6 @@ const CustomerPage: React.FC = () => {
       setScheduledTime('');
       setMapViewMode('locked');
       setNavigationRoute(null);
-      setLegProgress(null);
   }, []);
 
 
@@ -193,7 +198,7 @@ const CustomerPage: React.FC = () => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         // Only re-fetch if there's no active ride, to avoid disrupting a trip.
-        if (!ride) {
+        if (!currentRide) {
           fetchUserLocation(false);
         }
       }
@@ -205,26 +210,26 @@ const CustomerPage: React.FC = () => {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchUserLocation, ride]); // Re-run if these dependencies change.
+  }, [fetchUserLocation, currentRide]); // Re-run if these dependencies change.
   // --- END: Professional fix ---
 
 
   // Effect to reset UI after a ride is completed
   useEffect(() => {
     // When the ride is completed and then cleared from the context, reset the UI for a new ride.
-    if ((prevRideRef.current?.status === RideStatus.COMPLETED || prevRideRef.current?.status === RideStatus.CANCELLED) && !ride) {
+    if ((prevRideRef.current?.status === RideStatus.COMPLETED || prevRideRef.current?.status === RideStatus.CANCELLED) && !currentRide) {
       resetJourney();
     }
     // Store the current ride state for the next render to detect the change.
-    prevRideRef.current = ride;
-  }, [ride, resetJourney]);
+    prevRideRef.current = currentRide;
+  }, [currentRide, resetJourney]);
 
   // Effect to re-lock map view when a new ride is requested
   useEffect(() => {
-    if (ride && prevRideRef.current?.status !== ride.status) {
+    if (currentRide && prevRideRef.current?.status !== currentRide.status) {
         setMapViewMode('locked');
     }
-  }, [ride]);
+  }, [currentRide]);
 
 
   // Effect for fetching start location suggestions
@@ -281,44 +286,47 @@ const CustomerPage: React.FC = () => {
   
   // Effect for navigation mode route calculation
   useEffect(() => {
-    if (!ride || !startLocation || !driverLiveLocation) {
+    if (!currentRide || !startLocation) {
         setNavigationRoute(null);
-        setLegProgress(null);
         return;
+    }
+    
+    const driverLocation = assignedDriver?.location;
+    if (currentRide.status === RideStatus.PICKING_UP && !driverLocation) {
+      setNavigationRoute(null);
+      return;
     }
 
     const calculateNavRoute = async () => {
         try {
             let origin = startLocation;
-            let destination = ride.endLocation;
+            let destination = currentRide.endLocation;
 
-            if (ride.status === RideStatus.PICKING_UP) {
+            if (currentRide.status === RideStatus.PICKING_UP && driverLocation) {
                 // For customer, nav route is from driver to them, until pickup
-                origin = driverLiveLocation;
-                destination = startLocation;
-            } else if (ride.status === RideStatus.IN_PROGRESS) {
+                origin = driverLocation;
+                destination = currentRide.startLocation;
+            } else if (currentRide.status === RideStatus.IN_PROGRESS) {
                 // Then from their current location to destination
                 origin = startLocation;
-                destination = ride.endLocation;
+                destination = currentRide.endLocation;
             } else {
                 return;
             }
 
             const route = await getRoute(origin, destination);
             setNavigationRoute(route);
-            setLegProgress(route);
 
         } catch (error) {
             console.error("Customer nav route calculation failed:", error);
             setNavigationRoute(null);
-            setLegProgress(null);
         }
     };
     
     const debounceTimeout = setTimeout(calculateNavRoute, 2000);
     return () => clearTimeout(debounceTimeout);
 
-  }, [ride, startLocation, driverLiveLocation]);
+  }, [currentRide, startLocation, assignedDriver]);
 
   const handleSuggestionSelect = (suggestion: LocationSuggestion, type: 'start' | 'end') => {
     const newLocation = {
@@ -410,23 +418,23 @@ const CustomerPage: React.FC = () => {
   // --- END: New Handler ---
 
   const RideStatusIndicator = () => {
-    if (!ride || ride.status === RideStatus.IN_PROGRESS) return null; // IN_PROGRESS is handled by LiveTripDisplay
+    if (!currentRide || currentRide.status === RideStatus.IN_PROGRESS) return null; // IN_PROGRESS is handled by LiveTripDisplay
     let message = "";
-    switch(ride.status) {
-        case RideStatus.REQUESTED: message = ride.isScheduled ? `تم جدولة رحلتك بنجاح! سيتم البحث عن سائق في ${ride.scheduledTime}` : "جاري البحث عن سائق..."; break;
+    switch(currentRide.status) {
+        case RideStatus.REQUESTED: message = currentRide.isScheduled ? `تم جدولة رحلتك بنجاح! سيتم البحث عن سائق في ${currentRide.scheduledTime}` : "جاري البحث عن سائق..."; break;
         case RideStatus.ACCEPTED: message = `تم العثور على سائق! السائق في طريقه إليك.`; break;
         case RideStatus.PICKING_UP: message = "السائق يقترب من موقعك."; break;
-        case RideStatus.COMPLETED: message = `اكتملت الرحلة! الأجرة النهائية: ${ride.finalFare?.toLocaleString('ar-SY', { style: 'currency', currency: 'SYP' })}`; break;
+        case RideStatus.COMPLETED: message = `اكتملت الرحلة! الأجرة النهائية: ${currentRide.finalFare?.toLocaleString('ar-SY', { style: 'currency', currency: 'SYP' })}`; break;
         case RideStatus.CANCELLED: message = "تم إلغاء الرحلة."; break;
         default: return null;
     }
     return (
         <div className="absolute top-20 right-4 left-4 bg-primary/90 backdrop-blur-sm text-white p-4 rounded-lg shadow-lg text-center z-10 animate-fade-in-down">
             <p className="font-bold">{message}</p>
-            {(ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.PICKING_UP) &&
+            {assignedDriver && (currentRide.status === RideStatus.ACCEPTED || currentRide.status === RideStatus.PICKING_UP) &&
                 <div className="text-sm mt-2">
-                    <p>بيانات السائق: سامر السائق - كيا ريو (321789)</p>
-                    <p>رقم الهاتف: 0987654321</p>
+                    <p>بيانات السائق: {assignedDriver.name} - {assignedDriver.vehicle.model} ({assignedDriver.vehicle.plateNumber})</p>
+                    <p>رقم الهاتف: {assignedDriver.phone}</p>
                 </div>
             }
         </div>
@@ -446,9 +454,9 @@ const CustomerPage: React.FC = () => {
             weight: 10,
         }];
     }
-    const mainPolyline = ride?.polyline || routeInfo?.polyline;
+    const mainPolyline = currentRide?.polyline || routeInfo?.polyline;
     return mainPolyline ? [{ polyline: mainPolyline, color: '#3b82f6' }] : undefined;
-  }, [canNavigate, navigationRoute, ride, routeInfo]);
+  }, [canNavigate, navigationRoute, currentRide, routeInfo]);
 
 
   return (
@@ -479,9 +487,8 @@ const CustomerPage: React.FC = () => {
           <NavigationUI
             routeInfo={navigationRoute}
             currentLocation={startLocation}
-            legProgress={legProgress}
           />
-      ) : ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
+      ) : currentRide?.status === RideStatus.IN_PROGRESS && liveTripData ? (
           <div className="absolute inset-x-0 top-0 z-10 pt-20">
               <LiveTripDisplay {...liveTripData} />
           </div>
@@ -515,9 +522,9 @@ const CustomerPage: React.FC = () => {
         <InteractiveMap 
           center={mapCenterCoords}
           userLocation={startLocation ?? undefined}
-          driverLocation={driverLiveLocation ?? undefined}
-          startLocation={ride?.status !== RideStatus.IDLE ? ride?.startLocation : startLocation ?? undefined}
-          endLocation={ride?.status !== RideStatus.IDLE ? ride?.endLocation : endLocation ?? undefined}
+          driverLocation={assignedDriver?.location ?? undefined}
+          startLocation={currentRide?.status !== RideStatus.IDLE ? currentRide?.startLocation : startLocation ?? undefined}
+          endLocation={currentRide?.status !== RideStatus.IDLE ? currentRide?.endLocation : endLocation ?? undefined}
           routes={mapRoutes}
           onCenterChange={setMapCenter}
           disableAutoPanZoom={mapViewMode !== 'locked' || !!pinDropMode || canNavigate}
@@ -555,7 +562,7 @@ const CustomerPage: React.FC = () => {
       {/* --- END: Pin Drop UI --- */}
 
       {/* --- Booking Panel --- */}
-      { !ride && !pinDropMode &&
+      { !currentRide && !pinDropMode &&
       <div 
         className="absolute bottom-0 right-0 left-0 z-10 transition-transform duration-300 ease-in-out"
         style={{ transform: isPanelExpanded ? 'translateY(0)' : 'translateY(calc(100% - 60px))' }}

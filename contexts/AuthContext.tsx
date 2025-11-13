@@ -9,10 +9,20 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Mock Users based on phone number
-const mockUsers: { [phone: string]: User } = {
+// Expanded mock users and exported for seeding the 'database'
+export const mockUsers: { [phone: string]: User } = {
+    // Customers
     '0912345678': { id: 'cust1', phone: '0912345678', name: 'علي الزبون', role: UserRole.CUSTOMER, province: SyrianProvinces.DAMASCUS },
-    '0987654321': { id: 'driv1', phone: '0987654321', name: 'سامر السائق', role: UserRole.DRIVER, province: SyrianProvinces.ALEPPO, vehicle: { model: 'Kia Rio', plateNumber: '321789', type: VehicleType.AC_CAR }, rating: 4.8, isOnline: true } as Driver,
+    '0911111111': { id: 'cust2', phone: '0911111111', name: 'فاطمة العلي', role: UserRole.CUSTOMER, province: SyrianProvinces.ALEPPO },
+
+    // Drivers
+    '0987654321': { id: 'driv1', phone: '0987654321', name: 'سامر السائق', role: UserRole.DRIVER, province: SyrianProvinces.DAMASCUS, vehicle: { model: 'Kia Rio', plateNumber: '321789', type: VehicleType.AC_CAR }, rating: 4.8, isOnline: true } as Driver,
+    '0988888888': { id: 'driv2', phone: '0988888888', name: 'خالد المصري', role: UserRole.DRIVER, province: SyrianProvinces.DAMASCUS, vehicle: { model: 'Mercedes S-Class', plateNumber: '123123', type: VehicleType.VIP }, rating: 4.9, isOnline: true } as Driver,
+    '0977777777': { id: 'driv3', phone: '0977777777', name: 'لينا الحسن', role: UserRole.DRIVER, province: SyrianProvinces.ALEPPO, vehicle: { model: 'Toyota Corolla', plateNumber: '987654', type: VehicleType.NORMAL_CAR }, rating: 4.6, isOnline: false } as Driver,
+    '0966666666': { id: 'driv4', phone: '0966666666', name: 'حسن دراج', role: UserRole.DRIVER, province: SyrianProvinces.HOMS, vehicle: { model: 'Vespa', plateNumber: '555444', type: VehicleType.MOTORCYCLE }, rating: 4.7, isOnline: true } as Driver,
+
+
+    // Admin
     '0999999999': { id: 'admin1', phone: '0999999999', name: 'المدير العام', role: UserRole.ADMIN },
 };
 

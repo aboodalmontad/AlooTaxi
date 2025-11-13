@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { RouteInfo, Step } from '../types';
+import { RouteInfo } from '../types';
 import { getHaversineDistance } from '../services/mapService';
 
 // --- Turn Arrow Icons ---
@@ -49,10 +49,9 @@ const TurnArrow: React.FC<{ type: number, className?: string }> = ({ type, class
 interface NavigationUIProps {
     routeInfo: RouteInfo | null;
     currentLocation: { lat: number, lng: number } | null;
-    legProgress: { distance: number, duration: number } | null;
 }
 
-const NavigationUI: React.FC<NavigationUIProps> = ({ routeInfo, currentLocation, legProgress }) => {
+const NavigationUI: React.FC<NavigationUIProps> = ({ routeInfo, currentLocation }) => {
     const [currentStepIndex, setCurrentStepIndex] = useState(0);
     const [distanceToNextManeuver, setDistanceToNextManeuver] = useState(0);
 
@@ -61,113 +60,75 @@ const NavigationUI: React.FC<NavigationUIProps> = ({ routeInfo, currentLocation,
     useEffect(() => {
         // Reset step index when a new route is provided
         setCurrentStepIndex(0);
-    }, [routeInfo?.polyline]);
+    }, [routeInfo]);
 
     useEffect(() => {
         if (!currentLocation || !routeInfo?.polyline || steps.length === 0) return;
 
-        // Ensure we don't go out of bounds. The last step has no "next" step.
-        if (currentStepIndex >= steps.length - 1) {
-            setDistanceToNextManeuver(0);
-            return;
-        }
-
-        const nextStep = steps[currentStepIndex + 1];
-        const nextManeuverWayPointIndex = nextStep.way_points[0];
-        const nextManeuverCoordsArray = routeInfo.polyline[nextManeuverWayPointIndex];
-
-        if (!nextManeuverCoordsArray) return;
-
-        const nextManeuverCoords = { lat: nextManeuverCoordsArray[0], lng: nextManeuverCoordsArray[1] };
-        
-        const distance = getHaversineDistance(currentLocation, nextManeuverCoords) * 1000; // in meters
-        setDistanceToNextManeuver(distance);
-
         // Advance to the next step if user is very close to the current maneuver point
-        const currentManeuverWayPointIndex = steps[currentStepIndex].way_points[0];
-        const currentManeuverCoordsArray = routeInfo.polyline[currentManeuverWayPointIndex];
-        if(!currentManeuverCoordsArray) return;
-
-        const currentManeuverCoords = {lat: currentManeuverCoordsArray[0], lng: currentManeuverCoordsArray[1]}
-        const distanceToCurrentManeuver = getHaversineDistance(currentLocation, currentManeuverCoords) * 1000;
+        if (currentStepIndex < steps.length - 1) {
+            const endOfStepWayPointIndex = steps[currentStepIndex].way_points[1];
+            const maneuverCoordsArray = routeInfo.polyline[endOfStepWayPointIndex];
+            if(maneuverCoordsArray) {
+                const maneuverCoords = {lat: maneuverCoordsArray[0], lng: maneuverCoordsArray[1]};
+                const distanceToManeuver = getHaversineDistance(currentLocation, maneuverCoords) * 1000;
+                if (distanceToManeuver < 25) { // 25 meter threshold to advance
+                    setCurrentStepIndex(i => i + 1);
+                }
+            }
+        }
         
-        if (distanceToCurrentManeuver < 25 && currentStepIndex > 0) { // Don't auto-advance from the very first step
-            setCurrentStepIndex(i => i + 1);
+        // Calculate distance to the next maneuver (which is the end of the current step)
+        const currentManeuverIdx = steps[currentStepIndex].way_points[1];
+        const maneuverCoordsArr = routeInfo.polyline[currentManeuverIdx];
+         if (maneuverCoordsArr) {
+            const maneuverCoords = { lat: maneuverCoordsArr[0], lng: maneuverCoordsArr[1] };
+            const distance = getHaversineDistance(currentLocation, maneuverCoords) * 1000;
+            setDistanceToNextManeuver(distance);
         }
 
     }, [currentLocation, routeInfo, steps, currentStepIndex]);
     
     const currentStep = useMemo(() => steps[currentStepIndex], [steps, currentStepIndex]);
-    const nextStep = useMemo(() => (currentStepIndex + 1 < steps.length) ? steps[currentStepIndex + 1] : null, [steps, currentStepIndex]);
 
-    if (!routeInfo || !currentLocation || !legProgress) {
-        return null;
+    if (!currentStep) {
+        return (
+            <div className="absolute top-0 inset-x-0 bg-[#37474F] p-4 shadow-lg z-20 flex items-center justify-center h-40">
+                 <p className="text-2xl font-bold animate-pulse text-white">...جاري حساب التعليمات</p>
+            </div>
+        );
     }
 
     // --- Formatting Helpers ---
     const formatDistance = (meters: number) => {
-        if (meters < 1000) {
-            return `${Math.round(meters)} م`;
-        }
-        return `${(meters / 1000).toFixed(1)} كم`;
+        if (meters < 100) return { value: Math.max(0, Math.round(meters / 10) * 10), unit: 'م' };
+        if (meters < 1000) return { value: Math.max(0, Math.round(meters / 50) * 50), unit: 'م' };
+        return { value: (meters / 1000).toFixed(1), unit: 'كم' };
     };
 
-    const formatTime = (minutes: number) => {
-        const totalMinutes = Math.round(minutes);
-        const hours = Math.floor(totalMinutes / 60);
-        const mins = totalMinutes % 60;
-        if (hours > 0) {
-            return `${hours} س ${mins} د`;
-        }
-        return `${mins} د`;
-    };
-
-    const getETA = (minutes: number) => {
-        const etaDate = new Date(Date.now() + minutes * 60 * 1000);
-        return etaDate.toLocaleTimeString('ar-SY', { hour: '2-digit', minute: '2-digit', hour12: false });
-    };
+    const distanceData = formatDistance(distanceToNextManeuver);
+    const instructionText = currentStepIndex < steps.length - 1 
+        ? currentStep.instruction 
+        : 'لقد وصلت إلى وجهتك';
+    const streetName = currentStep.name;
 
     return (
-        <div className="absolute inset-0 z-10 pointer-events-none text-white flex flex-col justify-between p-4 animate-fade-in">
-            {/* Top elements container */}
-            <div className="space-y-2">
-                {/* Current Street Name - Top Center */}
-                <div className="w-full flex justify-center">
-                    <div className="bg-slate-900/80 backdrop-blur-sm p-2 rounded-lg shadow-lg text-center px-6">
-                        <p className="text-2xl font-bold">{currentStep?.name || "جاري حساب المسار..."}</p>
-                    </div>
-                </div>
-
-                {/* Next Turn Instruction - Top Left */}
-                {nextStep && (
-                    <div className="bg-slate-900/80 backdrop-blur-sm p-3 rounded-xl shadow-lg flex items-center gap-4 max-w-sm">
-                        <div className="flex-shrink-0 text-primary-light">
-                            <TurnArrow type={nextStep.type} className="w-16 h-16"/>
-                        </div>
-                        <div>
-                            <p className="text-3xl font-bold">{formatDistance(distanceToNextManeuver)}</p>
-                            <p className="text-xl text-slate-200">{nextStep.instruction}</p>
-                        </div>
-                    </div>
-                )}
+        <div className="absolute top-0 inset-x-0 bg-[#37474F] p-4 shadow-xl z-20 flex items-center justify-between h-40 animate-fade-in-down text-white">
+            {/* The layout is reversed in order for RTL flexbox to render it visually as LTR (arrow on left) */}
+            <div className="flex-1 text-center pr-4">
+                <h2 className="text-6xl font-bold truncate">{streetName || instructionText}</h2>
             </div>
-
-            {/* Bottom Info Bar */}
-            <div className="bg-slate-900/80 backdrop-blur-sm p-3 rounded-xl shadow-lg">
-                <div className="grid grid-cols-3 divide-x-2 divide-slate-600/50 rtl:divide-x-reverse text-center">
-                    <div className="px-2">
-                        <p className="text-sm text-slate-300">الوصول</p>
-                        <p className="text-2xl lg:text-3xl font-bold">{getETA(legProgress.duration)}</p>
-                    </div>
-                    <div className="px-2">
-                        <p className="text-sm text-slate-300">الوقت المتبقي</p>
-                        <p className="text-2xl lg:text-3xl font-bold">{formatTime(legProgress.duration)}</p>
-                    </div>
-                    <div className="px-2">
-                        <p className="text-sm text-slate-300">المسافة المتبقية</p>
-                        <p className="text-2xl lg:text-3xl font-bold">{legProgress.distance.toFixed(1)} <span className="text-lg">كم</span></p>
-                    </div>
+            
+            <div className="flex-shrink-0 flex flex-col items-center text-center w-40">
+                <div className="text-white">
+                    <TurnArrow type={currentStep.type} className="w-24 h-24 drop-shadow-lg" />
                 </div>
+                {/* FIX: Cast distanceData.value to a number before comparison, as it can be a string from toFixed(). */}
+                {Number(distanceData.value) > 0 && (
+                    <p className="text-4xl font-bold mt-1">
+                        {distanceData.value}<span className="text-2xl font-medium"> {distanceData.unit}</span>
+                    </p>
+                )}
             </div>
         </div>
     );

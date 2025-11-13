@@ -13,7 +13,18 @@ type MapViewMode = 'free' | 'locked' | 'navigation';
 
 const DriverPage: React.FC = () => {
   const { user, logout } = useAuth();
-  const { ride, acceptRide, rejectRide, completeRide, updateRideStatus, updateDriverLocation, liveTripData } = useRide();
+  const { 
+    currentRide, 
+    availableRides, 
+    acceptRide, 
+    rejectRide, 
+    completeRide, 
+    updateRideStatus, 
+    updateDriverLocation, 
+    updateDriverOnlineStatus,
+    liveTripData 
+  } = useRide();
+
   const [isOnline, setIsOnline] = useState(true);
   const [routeLegs, setRouteLegs] = useState<RouteStyle[]>([]);
   const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number, heading: number | null } | null>(null);
@@ -28,12 +39,19 @@ const DriverPage: React.FC = () => {
   const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [showEndTripConfirmation, setShowEndTripConfirmation] = useState(false);
   const [isManualLocating, setIsManualLocating] = useState(false);
-  const [isCurrentRideTooFar, setIsCurrentRideTooFar] = useState(false);
+  const [viewingRideRequest, setViewingRideRequest] = useState<Ride | null>(null);
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('locked');
   const routeCalculationTimeoutRef = useRef<number | null>(null);
   const notifiedRideIdRef = useRef<string | null>(null);
   
   const driver = user as Driver;
+
+  // Sync isOnline state with the central context
+  useEffect(() => {
+    if (driver) {
+      updateDriverOnlineStatus(driver.id, isOnline);
+    }
+  }, [isOnline, driver, updateDriverOnlineStatus]);
   
   const locateDriver = useCallback((isManualRequest: boolean) => {
     if (isManualRequest) {
@@ -49,7 +67,7 @@ const DriverPage: React.FC = () => {
 
     if (!navigator.geolocation) {
         setDriverLocation(fallbackLocation);
-        updateDriverLocation(fallbackLocation);
+        if (driver) updateDriverLocation(driver.id, fallbackLocation);
         setLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.");
         if (isManualRequest) setIsManualLocating(false);
         setIsOnline(false);
@@ -60,7 +78,7 @@ const DriverPage: React.FC = () => {
         const { latitude, longitude, heading } = position.coords;
         const newLocation = { lat: latitude, lng: longitude, heading };
         setDriverLocation(newLocation);
-        updateDriverLocation(newLocation);
+        if (driver) updateDriverLocation(driver.id, newLocation);
         setLocationError(null);
         setLocationWarning(null);
         if (isManualRequest) setIsManualLocating(false);
@@ -80,7 +98,7 @@ const DriverPage: React.FC = () => {
         }
         
         setDriverLocation(fallbackLocation);
-        updateDriverLocation(fallbackLocation);
+        if (driver) updateDriverLocation(driver.id, fallbackLocation);
         setLocationError(message);
         if (isManualRequest) setIsManualLocating(false);
         if (forceOffline) setIsOnline(false);
@@ -92,7 +110,7 @@ const DriverPage: React.FC = () => {
             const { latitude, longitude, heading } = position.coords;
             const quickLocation = { lat: latitude, lng: longitude, heading };
             setDriverLocation(quickLocation);
-            updateDriverLocation(quickLocation);
+            if (driver) updateDriverLocation(driver.id, quickLocation);
             setLocationWarning("جاري تحسين دقة الموقع...");
 
             // Step 2: Now try for a high-accuracy position in the background.
@@ -132,15 +150,11 @@ const DriverPage: React.FC = () => {
   useEffect(() => {
       const handleVisibilityChange = () => {
           if (document.visibilityState === 'visible' && isOnline) {
-              // User has returned to the app, force a location refresh
-              // to clear any stale data from a VPN.
               locateDriver(false);
           }
       };
       document.addEventListener('visibilitychange', handleVisibilityChange);
-      return () => {
-          document.removeEventListener('visibilitychange', handleVisibilityChange);
-      };
+      return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isOnline, locateDriver]);
   
   const handleManualLocate = () => {
@@ -150,16 +164,12 @@ const DriverPage: React.FC = () => {
 
   const handleLocationUpdate = useCallback((position: GeolocationPosition) => {
       const { latitude, longitude, heading } = position.coords;
-      const newLocation = {
-          lat: latitude,
-          lng: longitude,
-          heading: heading,
-      };
+      const newLocation = { lat: latitude, lng: longitude, heading };
       setDriverLocation(newLocation);
-      updateDriverLocation(newLocation);
+      if (driver) updateDriverLocation(driver.id, newLocation);
       setLocationError(null);
       setLocationWarning(null);
-  }, [updateDriverLocation]);
+  }, [driver, updateDriverLocation]);
 
   const handleLocationError = useCallback((err: GeolocationPositionError) => {
       let message = "";
@@ -181,28 +191,16 @@ const DriverPage: React.FC = () => {
       setLocationError(message);
   }, []);
 
-  useDriverTracking(isOnline && !!driverLocation, {
+  useDriverTracking(isOnline && !!driver, {
     onSuccess: handleLocationUpdate,
     onError: handleLocationError,
   });
 
   useEffect(() => {
-    setIsCurrentRideTooFar(false);
-    
-    if (ride?.status === RideStatus.REQUESTED && driverLocation && isOnline) {
-      const distanceToPickup = getHaversineDistance(driverLocation, ride.startLocation);
-      const MAX_PICKUP_DISTANCE_KM = 200;
-
-      if (distanceToPickup > MAX_PICKUP_DISTANCE_KM) {
-        console.warn(`Ride request ignored as it is too far away: ${distanceToPickup.toFixed(1)} km.`);
-        setIsCurrentRideTooFar(true);
-        setPickupRouteInfo(null);
-        return;
-      }
-
+    if (viewingRideRequest && driverLocation && isOnline) {
       const calculatePickupRoute = async () => {
         try {
-          const route = await getRoute(driverLocation, ride.startLocation);
+          const route = await getRoute(driverLocation, viewingRideRequest.startLocation);
           setPickupRouteInfo(route);
         } catch (err) {
           console.error("Failed to calculate route to pickup:", err);
@@ -213,12 +211,23 @@ const DriverPage: React.FC = () => {
     } else {
       setPickupRouteInfo(null);
     }
-  }, [ride, driverLocation, isOnline]);
+  }, [viewingRideRequest, driverLocation, isOnline]);
+  
+  useEffect(() => {
+    if (isOnline && !currentRide && availableRides.length > 0) {
+        const unseenRide = availableRides.find(r => r.id !== notifiedRideIdRef.current);
+        if(unseenRide) {
+            setViewingRideRequest(unseenRide);
+        }
+    } else if (!isOnline || currentRide) {
+        setViewingRideRequest(null);
+    }
+  }, [isOnline, availableRides, currentRide]);
 
   // Effect to calculate and display route for active trip stages
   useEffect(() => {
     const calculateAndSetRoutes = async () => {
-        if (!ride || !driverLocation) {
+        if (!currentRide || !driverLocation) {
             setRouteLegs([]);
             setRouteError(null);
             return;
@@ -228,70 +237,39 @@ const DriverPage: React.FC = () => {
             setRouteError(null);
             const newRouteLegs: RouteStyle[] = [];
 
-            if (ride.status === RideStatus.PICKING_UP) {
-                // Leg 1: Driver to pickup (live, blue)
-                const pickupRoute = await getRoute(driverLocation, ride.startLocation);
-                newRouteLegs.push({
-                    polyline: pickupRoute.polyline,
-                    color: '#3b82f6',
-                    casingColor: '#022c7a',
-                });
-
-                // Leg 2: Pickup to destination (upcoming, purple)
-                if (ride.polyline) {
-                    newRouteLegs.push({
-                        polyline: ride.polyline,
-                        color: '#8b5cf6',
-                        casingColor: '#4c1d95',
-                        opacity: 0.75
-                    });
+            if (currentRide.status === RideStatus.PICKING_UP) {
+                const pickupRoute = await getRoute(driverLocation, currentRide.startLocation);
+                newRouteLegs.push({ polyline: pickupRoute.polyline, color: '#3b82f6', casingColor: '#022c7a' });
+                if (currentRide.polyline) {
+                    newRouteLegs.push({ polyline: currentRide.polyline, color: '#8b5cf6', casingColor: '#4c1d95', opacity: 0.75 });
                 }
-            } else if (ride.status === RideStatus.IN_PROGRESS) {
-                // Main Leg: Driver to destination (live, blue)
-                const dropoffRoute = await getRoute(driverLocation, ride.endLocation);
-                newRouteLegs.push({
-                    polyline: dropoffRoute.polyline,
-                    color: '#3b82f6',
-                    casingColor: '#022c7a',
-                });
+            } else if (currentRide.status === RideStatus.IN_PROGRESS) {
+                const dropoffRoute = await getRoute(driverLocation, currentRide.endLocation);
+                newRouteLegs.push({ polyline: dropoffRoute.polyline, color: '#3b82f6', casingColor: '#022c7a' });
             } else {
                 setRouteLegs([]);
                 return;
             }
-
             setRouteLegs(newRouteLegs);
-
         } catch (error) {
             console.error("Driver route calculation failed:", error);
             setRouteLegs([]);
-            const errorMessage = error instanceof Error ? `فشل حساب المسار: ${error.message}` : "فشل حساب المسار لسبب غير معروف.";
-            setRouteError(errorMessage);
+            setRouteError(error instanceof Error ? `فشل حساب المسار: ${error.message}` : "فشل حساب المسار.");
         }
     };
-
-    if (routeCalculationTimeoutRef.current) {
-        clearTimeout(routeCalculationTimeoutRef.current);
-    }
+    if (routeCalculationTimeoutRef.current) clearTimeout(routeCalculationTimeoutRef.current);
     routeCalculationTimeoutRef.current = window.setTimeout(calculateAndSetRoutes, 1500);
-
-    return () => {
-        if (routeCalculationTimeoutRef.current) {
-            clearTimeout(routeCalculationTimeoutRef.current);
-        }
-    };
-  }, [ride?.status, driverLocation, ride?.startLocation, ride?.endLocation, ride?.polyline]);
+    return () => { if (routeCalculationTimeoutRef.current) clearTimeout(routeCalculationTimeoutRef.current); };
+  }, [currentRide?.status, driverLocation, currentRide?.startLocation, currentRide?.endLocation, currentRide?.polyline]);
 
   useEffect(() => {
-    if (!ride || !driverLocation || !isOnline) {
+    if (!currentRide || !driverLocation || !isOnline) {
       setCurrentLegInfo(null);
       setNavigationRoute(null);
       return;
     }
 
-    if (
-      ride.status !== RideStatus.PICKING_UP &&
-      ride.status !== RideStatus.IN_PROGRESS
-    ) {
+    if (currentRide.status !== RideStatus.PICKING_UP && currentRide.status !== RideStatus.IN_PROGRESS) {
       setCurrentLegInfo(null);
       setNavigationRoute(null);
       return;
@@ -299,107 +277,68 @@ const DriverPage: React.FC = () => {
 
     const calculateLegRoute = async () => {
       try {
-        const legDestination =
-          ride.status === RideStatus.IN_PROGRESS
-            ? ride.endLocation
-            : ride.startLocation;
-            
-        const distanceToLegDestination = getHaversineDistance(driverLocation, legDestination);
-        const MAX_ROUTE_DISTANCE_KM = 200;
-        if (distanceToLegDestination > MAX_ROUTE_DISTANCE_KM) {
-            console.warn(`Live leg info calculation aborted due to excessive distance: ${distanceToLegDestination.toFixed(1)}km.`);
-            setCurrentLegInfo(null);
-            setNavigationRoute(null);
-            return;
+        const legDestination = currentRide.status === RideStatus.IN_PROGRESS ? currentRide.endLocation : currentRide.startLocation;
+        const distance = getHaversineDistance(driverLocation, legDestination);
+        if (distance > 200) {
+            setCurrentLegInfo(null); setNavigationRoute(null); return;
         }
-
         const route = await getRoute(driverLocation, legDestination);
         setCurrentLegInfo(route);
         setNavigationRoute(route);
         if(routeError) setRouteError(null);
       } catch (error) {
-        setCurrentLegInfo(null);
-        setNavigationRoute(null);
+        setCurrentLegInfo(null); setNavigationRoute(null);
         console.error("Failed to calculate live leg route:", error);
       }
     };
-
     const debounceTimeout = setTimeout(calculateLegRoute, 2000);
-
     return () => clearTimeout(debounceTimeout);
-    
-  }, [ride?.status, driverLocation, isOnline, ride?.startLocation, ride?.endLocation, routeError]);
-
-  // Effect to play a sound and vibrate on new ride request
-  useEffect(() => {
-    if (
-      ride &&
-      ride.status === RideStatus.REQUESTED &&
-      ride.id !== notifiedRideIdRef.current &&
-      isOnline &&
-      !isCurrentRideTooFar
-    ) {
-      const playSound = () => {
-        try {
-          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const oscillator = audioContext.createOscillator();
-          const gainNode = audioContext.createGain();
-
-          oscillator.connect(gainNode);
-          gainNode.connect(audioContext.destination);
-
-          oscillator.type = 'sine';
-          oscillator.frequency.setValueAtTime(660, audioContext.currentTime);
-          // FIX: Corrected typo from `audio-context.currentTime` to `audioContext.currentTime`
-          gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
-          
-          oscillator.start();
-          gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.8);
-          oscillator.stop(audioContext.currentTime + 0.8);
-        } catch (error) {
-          console.error("Could not play notification sound:", error);
-        }
-      };
-
-      playSound();
-      
-      if ('vibrate' in navigator) {
-        navigator.vibrate([200, 100, 200]);
-      }
-
-      notifiedRideIdRef.current = ride.id;
-    }
-
-    if (!ride) {
-      notifiedRideIdRef.current = null;
-    }
-  }, [ride, isOnline, isCurrentRideTooFar]);
-
+  }, [currentRide?.status, driverLocation, isOnline, currentRide?.startLocation, currentRide?.endLocation, routeError]);
 
   useEffect(() => {
-    if (ride?.status === RideStatus.COMPLETED) {
-        setLastCompletedRide(ride);
+    if (viewingRideRequest && viewingRideRequest.id !== notifiedRideIdRef.current) {
+      try {
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(660, audioContext.currentTime);
+        gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+        oscillator.start();
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.8);
+        oscillator.stop(audioContext.currentTime + 0.8);
+      } catch (error) { console.error("Could not play sound:", error); }
+      if ('vibrate' in navigator) navigator.vibrate([200, 100, 200]);
+      notifiedRideIdRef.current = viewingRideRequest.id;
     }
-    if (!ride && lastCompletedRide) {
-        const timer = setTimeout(() => {
-            setLastCompletedRide(null);
-        }, 4000); 
+  }, [viewingRideRequest]);
+
+  useEffect(() => {
+    if (currentRide?.status === RideStatus.COMPLETED) setLastCompletedRide(currentRide);
+    if (!currentRide && lastCompletedRide) {
+        const timer = setTimeout(() => setLastCompletedRide(null), 4000); 
         return () => clearTimeout(timer);
     }
-  }, [ride, lastCompletedRide]);
+  }, [currentRide, lastCompletedRide]);
 
   const handleAcceptRide = () => {
-      if (ride) {
-        acceptRide(driver);
+      if (viewingRideRequest && driver) {
+        acceptRide(viewingRideRequest.id, driver);
+        setViewingRideRequest(null);
       }
   };
 
   const handleRejectRide = () => {
-    rejectRide();
+    if (viewingRideRequest) {
+        rejectRide(viewingRideRequest.id);
+        setViewingRideRequest(null);
+    }
   };
 
   const handleConfirmEndTrip = () => {
-    completeRide();
+    if (currentRide) completeRide(currentRide.id);
     setShowEndTripConfirmation(false);
   };
 
@@ -417,18 +356,7 @@ const DriverPage: React.FC = () => {
     );
   };
 
-  const IncomingRequest: React.FC = () => {
-      if (isCurrentRideTooFar) {
-          return (
-              <div className="absolute top-20 right-4 left-4 bg-yellow-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
-                  <h3 className="text-xl font-bold text-yellow-200 mb-2">تم تجاهل طلب رحلة</h3>
-                  <p>الزبون بعيد جداً عن موقعك الحالي.</p>
-              </div>
-          );
-      }
-      
-      if(!ride || ride.status !== RideStatus.REQUESTED || !isOnline) return null;
-
+  const IncomingRequest: React.FC<{ ride: Ride }> = ({ ride }) => {
       const driverShare = Math.round(ride.estimatedFare * 0.80);
       const vehicleName = VEHICLE_TYPES.find(v => v.id === ride.vehicleType)?.ar || 'غير محدد';
 
@@ -452,32 +380,19 @@ const DriverPage: React.FC = () => {
                   </div>
 
                   <div className="flex justify-between items-center bg-slate-700/50 p-3 rounded-lg text-center">
-                      <div>
-                          <p className="text-sm text-slate-400">مسافة الرحلة</p>
-                          <p className="font-bold text-xl">{ride.distance} كم</p>
-                      </div>
-                       <div>
-                          <p className="text-sm text-slate-400">نوع المركبة</p>
-                          <p className="font-bold text-xl">{vehicleName}</p>
-                      </div>
-                      <div>
-                          <p className="text-sm text-slate-400">زمن الرحلة</p>
-                          <p className="font-bold text-xl">~{Math.round(ride.duration)} د</p>
-                      </div>
+                      <div><p className="text-sm text-slate-400">مسافة الرحلة</p><p className="font-bold text-xl">{ride.distance} كم</p></div>
+                      <div><p className="text-sm text-slate-400">نوع المركبة</p><p className="font-bold text-xl">{vehicleName}</p></div>
+                      <div><p className="text-sm text-slate-400">زمن الرحلة</p><p className="font-bold text-xl">~{Math.round(ride.duration)} د</p></div>
                   </div>
 
                   <div className="mt-4 text-center">
-                    <p className="text-slate-300">أرباحك المتوقعة من هذه الرحلة</p>
+                    <p className="text-slate-300">أرباحك المتوقعة</p>
                     <p className="text-3xl font-bold text-green-400 my-1">{driverShare.toLocaleString('ar-SY', {style: 'currency', currency: 'SYP'})}</p>
                   </div>
 
                   <div className="flex justify-around mt-6 gap-4">
-                      <button onClick={handleAcceptRide} className="flex-1 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transform hover:scale-105 text-xl">
-                          قبول
-                      </button>
-                      <button onClick={handleRejectRide} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transform hover:scale-105 text-xl">
-                          رفض
-                      </button>
+                      <button onClick={handleAcceptRide} className="flex-1 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transform hover:scale-105 text-xl">قبول</button>
+                      <button onClick={handleRejectRide} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transform hover:scale-105 text-xl">رفض</button>
                   </div>
               </div>
           </div>
@@ -485,54 +400,37 @@ const DriverPage: React.FC = () => {
   }
   
   const CurrentTripInfo: React.FC = () => {
-    if(!ride || [RideStatus.REQUESTED, RideStatus.IDLE, RideStatus.COMPLETED, RideStatus.CANCELLED].includes(ride.status)) return null;
+    if(!currentRide) return null;
 
-    if (ride.status === RideStatus.IN_PROGRESS) {
+    if (currentRide.status === RideStatus.IN_PROGRESS) {
         return (
             <div className="absolute bottom-0 right-0 left-0 bg-slate-800/95 backdrop-blur-sm p-4 shadow-lg z-10 text-center rounded-t-2xl">
-                <h3 className="text-lg font-bold">الرحلة جارية إلى: {ride.endLocation.name}</h3>
+                <h3 className="text-lg font-bold">الرحلة جارية إلى: {currentRide.endLocation.name}</h3>
                 <p className="text-slate-300 mt-1">الزبون: علي الزبون - 0912345678</p>
                 {routeError && <p className="text-red-400 mt-2">{routeError}</p>}
-                <button 
-                    onClick={() => setShowEndTripConfirmation(true)} 
-                    className="mt-4 w-full max-w-xs mx-auto py-3 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">
-                    إنهاء الرحلة
-                </button>
+                <button onClick={() => setShowEndTripConfirmation(true)} className="mt-4 w-full max-w-xs mx-auto py-3 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">إنهاء الرحلة</button>
             </div>
         );
     }
     
-    let statusText = '';
-    let actionButton = null;
+    let statusText = '', actionButton = null;
     
-    switch(ride.status) {
-        case RideStatus.PICKING_UP:
-            statusText = 'في الطريق إلى الزبون';
-            actionButton = <button onClick={() => updateRideStatus(RideStatus.IN_PROGRESS)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">التقاط الزبون وبدء الرحلة</button>;
-            break;
+    if(currentRide.status === RideStatus.PICKING_UP) {
+        statusText = 'في الطريق إلى الزبون';
+        actionButton = <button onClick={() => updateRideStatus(currentRide.id, RideStatus.IN_PROGRESS)} className="mt-4 px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">التقاط الزبون وبدء الرحلة</button>;
     }
 
     return (
        <div className="absolute bottom-0 right-0 left-0 bg-slate-800/95 backdrop-blur-sm p-4 shadow-lg z-10 text-center rounded-t-2xl">
           <h3 className="text-lg font-bold">{statusText}</h3>
-
           {currentLegInfo ? (
               <div className="my-3 p-2 bg-slate-700/50 rounded-md text-center">
-                  <p>
-                      المتبقي للوصول للزبون: 
-                      <span className="font-bold text-lg mx-2">{currentLegInfo.distance.toFixed(1)} كم</span> 
-                      (<span className="font-bold text-lg">~{Math.round(currentLegInfo.duration)} د</span>)
-                  </p>
+                  <p>المتبقي للوصول: <span className="font-bold text-lg mx-2">{currentLegInfo.distance.toFixed(1)} كم</span> (<span className="font-bold text-lg">~{Math.round(currentLegInfo.duration)} د</span>)</p>
               </div>
-          ) : (
-              <div className="my-3 p-2 text-center text-slate-400 animate-pulse">
-                  ...جاري حساب المسافة المتبقية
-              </div>
-          )}
-
+          ) : (<div className="my-3 p-2 text-center text-slate-400 animate-pulse">...جاري حساب المسافة</div>)}
           <div className="text-slate-300 mt-2">
-            <p>الزبون: علي الزبون - رقم الهاتف: 0912345678</p>
-            <p>من: {ride.startLocation.name}</p>
+            <p>الزبون: علي الزبون - هاتف: 0912345678</p>
+            <p>من: {currentRide.startLocation.name}</p>
           </div>
           {routeError && <p className="text-red-400 mt-2">{routeError}</p>}
           {actionButton}
@@ -541,22 +439,12 @@ const DriverPage: React.FC = () => {
   }
 
   const ConfirmationDialog: React.FC<{ message: string; onConfirm: () => void; onCancel: () => void; }> = ({ message, onConfirm, onCancel }) => (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 transition-opacity duration-300" style={{ animation: 'fadeIn 0.2s ease-out' }} onClick={onCancel}>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" style={{ animation: 'fadeIn 0.2s ease-out' }} onClick={onCancel}>
         <div className="bg-slate-800 rounded-lg shadow-2xl p-8 w-full max-w-sm mx-4 text-center" onClick={e => e.stopPropagation()}>
             <p className="text-xl mb-6">{message}</p>
             <div className="flex justify-center gap-4">
-                <button 
-                    onClick={onConfirm} 
-                    className="px-8 py-2 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transform hover:scale-105"
-                >
-                    نعم
-                </button>
-                <button 
-                    onClick={onCancel} 
-                    className="px-8 py-2 bg-slate-600 text-white font-bold rounded-lg hover:bg-slate-500 transform hover:scale-105"
-                >
-                    لا
-                </button>
+                <button onClick={onConfirm} className="px-8 py-2 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">نعم</button>
+                <button onClick={onCancel} className="px-8 py-2 bg-slate-600 text-white font-bold rounded-lg hover:bg-slate-500">لا</button>
             </div>
         </div>
     </div>
@@ -568,12 +456,7 @@ const DriverPage: React.FC = () => {
   
   const routeLegsForMap = useMemo(() => {
     if (canNavigate && navigationRoute) {
-        return [{
-            polyline: navigationRoute.polyline,
-            color: '#34D399', // Bright green
-            casingColor: '#047857', // Darker green
-            weight: 10,
-        }];
+        return [{ polyline: navigationRoute.polyline, color: '#34D399', casingColor: '#047857', weight: 10 }];
     }
     return routeLegs;
   }, [canNavigate, navigationRoute, routeLegs]);
@@ -583,25 +466,12 @@ const DriverPage: React.FC = () => {
       <header className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900/80 to-transparent p-4 flex justify-between items-center z-20">
         <h1 className="text-2xl font-bold text-primary">واجهة السائق</h1>
         <div className="flex items-center">
-            <button
-                onClick={handleManualLocate}
-                disabled={isManualLocating}
-                className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center text-2xl hover:bg-slate-600 disabled:opacity-50 disabled:cursor-wait mr-4"
-                aria-label="تحديد موقعي الحالي"
-                title="تحديد موقعي الحالي"
-            >
-                {isManualLocating ? (
-                  <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                ) : (
-                  '🎯'
-                )}
+            <button onClick={handleManualLocate} disabled={isManualLocating} className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center text-2xl hover:bg-slate-600 disabled:opacity-50 mr-4" title="تحديد موقعي">
+                {isManualLocating ? (<svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>) : '🎯'}
             </button>
             <label className="relative inline-flex items-center cursor-pointer mr-5">
                 <input type="checkbox" checked={isOnline} onChange={() => setIsOnline(!isOnline)} className="sr-only peer" />
-                <div className="w-11 h-6 bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                <div className="w-11 h-6 bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                 <span className="mr-3 text-sm font-medium">{isOnline ? 'متصل' : 'غير متصل'}</span>
             </label>
             <span className="ml-4">مرحباً، {user?.name}</span>
@@ -610,89 +480,25 @@ const DriverPage: React.FC = () => {
       </header>
       
       {showEndTripConfirmation && (
-        <ConfirmationDialog
-            message="هل أنت متأكد أنك تريد إنهاء الرحلة؟"
-            onConfirm={handleConfirmEndTrip}
-            onCancel={() => setShowEndTripConfirmation(false)}
-        />
+        <ConfirmationDialog message="هل أنت متأكد أنك تريد إنهاء الرحلة؟" onConfirm={handleConfirmEndTrip} onCancel={() => setShowEndTripConfirmation(false)} />
       )}
-
-      {locationError && (
-        <div className="absolute top-20 right-4 left-4 bg-red-800/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
-            <p className="font-bold">خطأ في تحديد الموقع</p>
-            <p>{locationError}</p>
-        </div>
+      {locationError && <div className="absolute top-20 right-4 left-4 bg-red-800/95 p-4 rounded-lg z-20 text-center"><p className="font-bold">خطأ الموقع</p><p>{locationError}</p></div>}
+      {locationWarning && !locationError && <div className="absolute top-20 right-4 left-4 bg-yellow-600/95 p-4 rounded-lg z-20 text-center"><p className="font-bold">تنبيه</p><p>{locationWarning}</p></div>}
+      {canNavigate ? (<NavigationUI routeInfo={navigationRoute} currentLocation={driverLocation} />
+      ) : currentRide?.status === RideStatus.IN_PROGRESS && liveTripData ? (<div className="absolute inset-x-0 top-0 z-10 pt-20"><LiveTripDisplay {...liveTripData} /></div>
+      ) : lastCompletedRide ? (<TripSummary ride={lastCompletedRide} />
+      ) : (viewingRideRequest && <IncomingRequest ride={viewingRideRequest} />
       )}
-
-      {locationWarning && !locationError && (
-        <div className="absolute top-20 right-4 left-4 bg-yellow-600/95 backdrop-blur-sm p-4 rounded-lg shadow-lg z-20 text-center animate-fade-in-down">
-            <p className="font-bold">تنبيه بشأن الموقع</p>
-            <p>{locationWarning}</p>
-        </div>
-      )}
-
-      {canNavigate ? (
-          <NavigationUI
-            routeInfo={navigationRoute}
-            currentLocation={driverLocation}
-            legProgress={currentLegInfo}
-          />
-      ) : ride?.status === RideStatus.IN_PROGRESS && liveTripData ? (
-          <div className="absolute inset-x-0 top-0 z-10 pt-20">
-              <LiveTripDisplay {...liveTripData} />
-          </div>
-      ) : lastCompletedRide ? (
-          <TripSummary ride={lastCompletedRide} />
-      ) : (
-          <IncomingRequest />
-      )}
-      
       {!canNavigate && <CurrentTripInfo />}
-
 
       <div className="flex-grow relative">
           <div className="absolute top-24 right-4 z-10 flex flex-col gap-2">
-            {mapViewMode !== 'locked' && (
-              <button
-                  onClick={() => setMapViewMode('locked')}
-                  className="w-12 h-12 bg-slate-800/80 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl hover:bg-slate-700 shadow-lg"
-                  aria-label="إعادة التمركز والتتبع"
-                  title="إعادة التمركز والتتبع"
-              >
-                  🖼️
-              </button>
-            )}
-             <button
-                onClick={() => setMapViewMode(mapViewMode === 'navigation' ? 'locked' : 'navigation')}
-                disabled={typeof driverLocation?.heading !== 'number'}
-                className={`w-12 h-12 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl shadow-lg transition-colors ${mapViewMode === 'navigation' ? 'bg-primary text-white' : 'bg-slate-800/80 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}
-                aria-label="تبديل وضع الملاحة"
-                title={typeof driverLocation?.heading !== 'number' ? 'وضع الملاحة غير متاح (تحرك لعرض الاتجاه)' : 'تبديل وضع الملاحة'}
-            >
-                🧭
-            </button>
-        </div>
-
-        {driverLocation ? (
-          <InteractiveMap 
-              center={driverLocation ? [driverLocation.lat, driverLocation.lng] : provinceCenter}
-              userLocation={driverLocation}
-              userLocationAs="driver"
-              startLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.startLocation : undefined}
-              endLocation={ride && ride.status !== RideStatus.IDLE && ride.status !== RideStatus.REQUESTED ? ride.endLocation : undefined}
-              routes={routeLegsForMap}
-              disableAutoPanZoom={mapViewMode !== 'locked' || canNavigate}
-              onUserInteraction={() => setMapViewMode('free')}
-              navigationMode={{
-                  enabled: canNavigate,
-                  bearing: driverLocation?.heading ?? 0,
-              }}
-          />
-        ) : (
-          <div className="h-full w-full flex items-center justify-center bg-slate-900">
-            <p className="text-lg animate-pulse">جاري تحديد موقعك...</p>
+            {mapViewMode !== 'locked' && <button onClick={() => setMapViewMode('locked')} className="w-12 h-12 bg-slate-800/80 rounded-full flex items-center justify-center text-3xl hover:bg-slate-700" title="إعادة التمركز">🖼️</button>}
+            <button onClick={() => setMapViewMode(mapViewMode === 'navigation' ? 'locked' : 'navigation')} disabled={typeof driverLocation?.heading !== 'number'} className={`w-12 h-12 rounded-full flex items-center justify-center text-3xl ${mapViewMode === 'navigation' ? 'bg-primary' : 'bg-slate-800/80 hover:bg-slate-700'} disabled:opacity-50`} title="وضع الملاحة">🧭</button>
           </div>
-        )}
+          {driverLocation ? (
+            <InteractiveMap center={driverLocation ? [driverLocation.lat, driverLocation.lng] : provinceCenter} userLocation={driverLocation} userLocationAs="driver" startLocation={currentRide?.startLocation} endLocation={currentRide?.endLocation} routes={routeLegsForMap} disableAutoPanZoom={mapViewMode !== 'locked' || canNavigate} onUserInteraction={() => setMapViewMode('free')} navigationMode={{ enabled: canNavigate, bearing: driverLocation?.heading ?? 0 }} />
+          ) : (<div className="h-full w-full flex items-center justify-center bg-slate-900"><p className="text-lg animate-pulse">جاري تحديد موقعك...</p></div>)}
       </div>
     </div>
   );

@@ -1,14 +1,15 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
-import { PricingSettings, VehicleType, DriverPayment, Ride, RideStatus, SyrianProvinces } from '../types';
+// FIX: Import UserRole to use in mock data.
+import { PricingSettings, VehicleType, DriverPayment, Ride, RideStatus, Driver, UserRole } from '../types';
 import { DAMASCUS_COORDS, VEHICLE_TYPES } from '../constants';
 import { useApi } from '../App';
 import InteractiveMap, { RouteStyle } from '../components/InteractiveMap';
 
 const AdminPage: React.FC = () => {
     const { user, logout } = useAuth();
-    const [activeTab, setActiveTab] = useState('drivers');
+    const [activeTab, setActiveTab] = useState('liveMap');
 
     const renderContent = () => {
         switch (activeTab) {
@@ -174,15 +175,8 @@ const ReportsManagement: React.FC = () => {
 };
 
 // --- Driver Data Structures ---
-interface DriverData {
-    id: string;
-    name: string;
-    phone: string;
-    vehicleType: VehicleType;
-    isOnline: boolean;
+interface DriverData extends Driver {
     isBlocked: boolean;
-    // Add location for live map
-    location?: { lat: number, lng: number };
     performance: {
         totalRides: number;
         averageRating: number;
@@ -190,11 +184,12 @@ interface DriverData {
         weeklyRides: number[]; // [Sat, Sun, Mon, Tue, Wed, Thu, Fri]
     };
 }
+
 const initialDrivers: DriverData[] = [
-    { id: 'driv1', name: 'سامر السائق', phone: '0987654321', vehicleType: VehicleType.AC_CAR, isOnline: true, isBlocked: false, location: { lat: 33.515, lng: 36.278 }, performance: { totalRides: 152, averageRating: 4.8, totalEarnings: 1850000, weeklyRides: [15, 14, 8, 10, 12, 18, 5] } },
-    { id: 'driv4', name: 'محمد الأحمد', phone: '0911111111', vehicleType: VehicleType.NORMAL_CAR, isOnline: false, isBlocked: false, performance: { totalRides: 89, averageRating: 4.5, totalEarnings: 980000, weeklyRides: [0, 0, 10, 9, 11, 14, 12] } },
-    { id: 'driv5', name: 'خالد المصري', phone: '0922222222', vehicleType: VehicleType.VIP, isOnline: true, isBlocked: false, location: { lat: 33.500, lng: 36.300 }, performance: { totalRides: 45, averageRating: 4.9, totalEarnings: 2500000, weeklyRides: [2, 3, 1, 4, 3, 5, 4] } },
-    { id: 'driv6', name: 'لينا الحسن', phone: '0933333333', vehicleType: VehicleType.MOTORCYCLE, isOnline: false, isBlocked: true, performance: { totalRides: 210, averageRating: 4.2, totalEarnings: 1200000, weeklyRides: [20, 18, 22, 15, 10, 0, 0] } },
+    // FIX: Use UserRole enum instead of string literal for type safety.
+    { id: 'driv1', name: 'سامر السائق', phone: '0987654321', role: UserRole.DRIVER, vehicle: {type: VehicleType.AC_CAR, model: 'Kia Rio', plateNumber: '123'}, rating: 4.8, isOnline: true, isBlocked: false, location: { lat: 33.515, lng: 36.278, heading: null }, performance: { totalRides: 152, averageRating: 4.8, totalEarnings: 1850000, weeklyRides: [15, 14, 8, 10, 12, 18, 5] } },
+    // FIX: Use UserRole enum instead of string literal for type safety.
+    { id: 'driv2', name: 'خالد المصري', phone: '0988888888', role: UserRole.DRIVER, vehicle: {type: VehicleType.VIP, model: 'Mercedes', plateNumber: '456'}, rating: 4.9, isOnline: true, isBlocked: false, location: { lat: 33.500, lng: 36.300, heading: null }, performance: { totalRides: 45, averageRating: 4.9, totalEarnings: 2500000, weeklyRides: [2, 3, 1, 4, 3, 5, 4] } },
 ];
 
 // --- Driver Performance Modal ---
@@ -250,8 +245,8 @@ const DriverPerformanceModal: React.FC<{ driver: DriverData; onClose: () => void
 
 const DriverManagement: React.FC = () => {
     const mockNewDrivers = [
-        { id: 'driv2', name: 'أحمد جديد', status: 'Pending', date: '2024-05-20' },
-        { id: 'driv3', name: 'فاطمة خالد', status: 'Pending', date: '2024-05-19' },
+        { id: 'driv3', name: 'أحمد جديد', status: 'Pending', date: '2024-05-20' },
+        { id: 'driv4', name: 'فاطمة خالد', status: 'Pending', date: '2024-05-19' },
     ];
     
     const [drivers, setDrivers] = useState(initialDrivers);
@@ -301,7 +296,7 @@ const DriverManagement: React.FC = () => {
                             <tr key={driver.id} className={`hover:bg-slate-700/50 transition-colors duration-200 ${driver.isBlocked ? 'opacity-50 bg-slate-900/50' : ''}`}>
                                 <td className="p-4">{driver.name}</td>
                                 <td className="p-4" dir="ltr">{driver.phone}</td>
-                                <td className="p-4">{VEHICLE_TYPES.find(v => v.id === driver.vehicleType)?.ar || 'غير محدد'}</td>
+                                <td className="p-4">{VEHICLE_TYPES.find(v => v.id === driver.vehicle.type)?.ar || 'غير محدد'}</td>
                                 <td className="p-4">
                                     <div className="flex items-center">
                                         <span className={`h-3 w-3 rounded-full mr-2 ${driver.isOnline ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`}></span>
@@ -335,15 +330,13 @@ const DriverManagement: React.FC = () => {
 // --- Mock Data for Accounting ---
 const mockCompletedRides: Ride[] = [
     { id: 'ride1', driverId: 'driv1', customerId: 'c1', status: RideStatus.COMPLETED, finalFare: 12500, completedAt: '2024-05-20T10:00:00Z', startLocation: {name: 'المزة'}, endLocation: {name: 'البرامكة'} } as Ride,
-    { id: 'ride2', driverId: 'driv4', customerId: 'c2', status: RideStatus.COMPLETED, finalFare: 8000, completedAt: '2024-05-20T11:00:00Z', startLocation: {name: 'الحمدانية'}, endLocation: {name: 'الجميلية'} } as Ride,
+    { id: 'ride2', driverId: 'driv2', customerId: 'c2', status: RideStatus.COMPLETED, finalFare: 8000, completedAt: '2024-05-20T11:00:00Z', startLocation: {name: 'الحمدانية'}, endLocation: {name: 'الجميلية'} } as Ride,
     { id: 'ride3', driverId: 'driv1', customerId: 'c3', status: RideStatus.COMPLETED, finalFare: 25000, completedAt: '2024-05-21T14:30:00Z', startLocation: {name: 'مشروع دمر'}, endLocation: {name: 'المطار'} } as Ride,
-    { id: 'ride4', driverId: 'driv5', customerId: 'c4', status: RideStatus.COMPLETED, finalFare: 45000, completedAt: '2024-05-22T09:00:00Z', startLocation: {name: 'فندق الفور سيزن'}, endLocation: {name: 'صحنايا'} } as Ride,
-    { id: 'ride5', driverId: 'driv1', customerId: 'c5', status: RideStatus.COMPLETED, finalFare: 9000, completedAt: '2024-05-23T18:00:00Z', startLocation: {name: 'باب توما'}, endLocation: {name: 'العباسيين'} } as Ride,
 ];
 
 const mockDriverPayments: DriverPayment[] = [
     { id: 'pay1', driverId: 'driv1', amount: 3000, date: '2024-05-22T12:00:00Z' },
-    { id: 'pay2', driverId: 'driv4', amount: 5000, date: '2024-05-23T15:00:00Z' },
+    { id: 'pay2', driverId: 'driv2', amount: 5000, date: '2024-05-23T15:00:00Z' },
 ];
 
 const SITE_COMMISSION_RATE = 0.20; // 20%
@@ -569,56 +562,13 @@ const ApiKeysManagement: React.FC = () => {
 };
 
 
-// --- Live Map View ---
-const mockActiveRides: Ride[] = [
-    {
-        id: 'activeride_1',
-        status: RideStatus.PICKING_UP,
-        driverId: 'driv1',
-        startLocation: { lat: 33.5138, lng: 36.2765, name: "ساحة المرجة" },
-        endLocation: { lat: 33.522, lng: 36.29, name: "كلية الطب" },
-        polyline: [[33.5138, 36.2765], [33.515, 36.28], [33.522, 36.29]],
-    } as Ride,
-    {
-        id: 'activeride_2',
-        status: RideStatus.IN_PROGRESS,
-        driverId: 'driv5',
-        startLocation: { lat: 33.505, lng: 36.295, name: "فندق الشام" },
-        endLocation: { lat: 33.49, lng: 36.25, name: "كفرسوسة" },
-        polyline: [[33.505, 36.295], [33.500, 36.28], [33.49, 36.25]],
-    } as Ride,
-];
-
-
 const LiveMapView: React.FC = () => {
-    const [drivers, setDrivers] = useState<DriverData[]>(initialDrivers);
-    const [rides] = useState<Ride[]>(mockActiveRides);
+    const { onlineDrivers, allRides } = useRide();
     const [isAutoFitEnabled, setIsAutoFitEnabled] = useState(true);
 
-    // Simulate driver movement
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setDrivers(prevDrivers =>
-                prevDrivers.map(driver => {
-                    if (driver.isOnline && driver.location) {
-                        return {
-                            ...driver,
-                            location: {
-                                lat: driver.location.lat + (Math.random() - 0.5) * 0.001,
-                                lng: driver.location.lng + (Math.random() - 0.5) * 0.001,
-                            },
-                        };
-                    }
-                    return driver;
-                })
-            );
-        }, 3000); // Update every 3 seconds
+    const activeRides = allRides.filter(r => r.status === RideStatus.PICKING_UP || r.status === RideStatus.IN_PROGRESS);
 
-        return () => clearInterval(interval);
-    }, []);
-
-    const onlineDrivers = drivers.filter(d => d.isOnline && d.location);
-    const routes: RouteStyle[] = rides.map(ride => ({
+    const routes: RouteStyle[] = activeRides.map(ride => ({
         polyline: ride.polyline,
         color: ride.status === RideStatus.PICKING_UP ? '#8b5cf6' : '#3b82f6', // Purple for pickup, Blue for in-progress
         weight: 5,
@@ -652,7 +602,7 @@ const LiveMapView: React.FC = () => {
                             popupContent={`
                                 <strong>${driver.name}</strong><br/>
                                 الحالة: ${driver.isOnline ? 'متصل' : 'غير متصل'}<br/>
-                                المركبة: ${VEHICLE_TYPES.find(v => v.id === driver.vehicleType)?.ar || ''}
+                                المركبة: ${VEHICLE_TYPES.find(v => v.id === driver.vehicle.type)?.ar || ''}
                             `}
                          />
                     ))}

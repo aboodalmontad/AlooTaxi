@@ -1,6 +1,8 @@
-import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect, useRef } from 'react';
-import { Ride, RideStatus, PricingSettings, RouteInfo, Driver, VehicleType, VehiclePricing } from '../types';
+import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect, useRef, useMemo } from 'react';
+// FIX: Import UserRole to resolve type errors.
+import { Ride, RideStatus, PricingSettings, RouteInfo, Driver, VehicleType, UserRole } from '../types';
 import { useAuth } from './AuthContext';
+import { mockUsers } from './AuthContext';
 
 interface LiveTripData {
   distanceTraveled: number; // in km
@@ -9,24 +11,28 @@ interface LiveTripData {
 }
 
 interface RideContextType {
-  ride: Ride | null;
-  driverLiveLocation: { lat: number; lng: number; } | null;
+  currentRide: Ride | null;
+  availableRides: Ride[];
+  allRides: Ride[];
+  onlineDrivers: Driver[];
   liveTripData: LiveTripData | null;
   pricing: PricingSettings;
   requestRide: (start: any, end: any, vehicleType: VehicleType, routeInfo: RouteInfo, schedule?: { isScheduled: boolean, time: string }) => void;
-  acceptRide: (driver: Driver) => void;
-  rejectRide: () => void;
-  cancelRide: () => void;
-  completeRide: () => void;
+  acceptRide: (rideId: string, driver: Driver) => void;
+  rejectRide: (rideId: string) => void;
+  cancelRide: (rideId: string) => void;
+  completeRide: (rideId: string) => void;
   updatePricing: (newPricing: PricingSettings) => void;
   getEstimatedFare: (vehicleType: VehicleType, distance: number, duration: number) => number;
-  updateRideStatus: (newStatus: RideStatus) => void;
-  updateDriverLocation: (location: { lat: number; lng: number; }) => void;
+  updateRideStatus: (rideId: string, newStatus: RideStatus) => void;
+  updateDriverLocation: (driverId: string, location: { lat: number; lng: number; heading: number | null }) => void;
+  updateDriverOnlineStatus: (driverId: string, isOnline: boolean) => void;
 }
 
 const RideContext = createContext<RideContextType | undefined>(undefined);
 
-const RIDE_STORAGE_KEY = 'allo-taxi-current-ride';
+const RIDES_DB_KEY = 'allo-taxi-rides-db';
+const DRIVERS_DB_KEY = 'allo-taxi-drivers-db';
 
 const initialPricing: PricingSettings = {
     [VehicleType.NORMAL_CAR]: { baseFare: 3000, perKm: 500, perMinute: 100 },
@@ -37,87 +43,94 @@ const initialPricing: PricingSettings = {
     [VehicleType.MOTORCYCLE]: { baseFare: 1500, perKm: 300, perMinute: 75 },
 };
 
-export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [ride, setRide] = useState<Ride | null>(() => {
+// Helper to safely interact with localStorage
+const db = {
+  read: <T,>(key: string): T | null => {
     try {
-        const item = window.localStorage.getItem(RIDE_STORAGE_KEY);
-        return item ? JSON.parse(item) : null;
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : null;
     } catch (error) {
-        console.error('Error reading ride from localStorage', error);
-        return null;
+      console.error(`Error reading ${key} from localStorage`, error);
+      return null;
     }
-  });
-  const [driverLiveLocation, setDriverLiveLocation] = useState<{ lat: number; lng: number; } | null>(null);
-  const [pricing, setPricing] = useState<PricingSettings>(initialPricing);
-  const { user } = useAuth();
-  const [liveTripData, setLiveTripData] = useState<LiveTripData | null>(null);
+  },
+  write: (key: string, data: any) => {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(data));
+    } catch (error) {
+      console.error(`Error writing ${key} to localStorage`, error);
+    }
+  },
+};
 
+
+export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [rides, setRides] = useState<Ride[]>(() => db.read<Ride[]>(RIDES_DB_KEY) || []);
+  const [drivers, setDrivers] = useState<Driver[]>(() => db.read<Driver[]>(DRIVERS_DB_KEY) || []);
+  const [pricing, setPricing] = useState<PricingSettings>(initialPricing);
+  const [liveTripData, setLiveTripData] = useState<LiveTripData | null>(null);
+  
+  const { user } = useAuth();
   const tripIntervalRef = useRef<number | null>(null);
   const tripStartTimeRef = useRef<Date | null>(null);
 
-  const setRideAndSync = useCallback((value: Ride | null | ((prevRide: Ride | null) => Ride | null)) => {
-    const updater = (prevRide: Ride | null): Ride | null => {
-        const newRide = typeof value === 'function' ? value(prevRide) : value;
-        try {
-            if (newRide) {
-                window.localStorage.setItem(RIDE_STORAGE_KEY, JSON.stringify(newRide));
-            } else {
-                window.localStorage.removeItem(RIDE_STORAGE_KEY);
-            }
-        } catch (error) {
-            console.error('Error writing ride to localStorage', error);
+  // Initialize and sync state with localStorage
+  useEffect(() => {
+    // Seed drivers DB from mock data if it's empty
+    const storedDrivers = db.read<Driver[]>(DRIVERS_DB_KEY);
+    if (!storedDrivers || storedDrivers.length === 0) {
+      const initialDrivers = Object.values(mockUsers).filter(u => u.role === 'DRIVER') as Driver[];
+      setDrivers(initialDrivers);
+      db.write(DRIVERS_DB_KEY, initialDrivers);
+    }
+
+    const syncState = (event: StorageEvent) => {
+        if (event.key === RIDES_DB_KEY) {
+            setRides(db.read<Ride[]>(RIDES_DB_KEY) || []);
         }
-        return newRide;
+        if (event.key === DRIVERS_DB_KEY) {
+            setDrivers(db.read<Driver[]>(DRIVERS_DB_KEY) || []);
+        }
     };
-    setRide(updater);
+
+    window.addEventListener('storage', syncState);
+    return () => window.removeEventListener('storage', syncState);
   }, []);
 
-  useEffect(() => {
-    const syncRide = (event: StorageEvent) => {
-        if (event.key === RIDE_STORAGE_KEY) {
-            try {
-                const item = event.newValue;
-                setRide(item ? JSON.parse(item) : null);
-            } catch (error) {
-                console.error('Error syncing ride from localStorage', error);
-            }
-        }
-    };
-    window.addEventListener('storage', syncRide);
-    return () => {
-        window.removeEventListener('storage', syncRide);
-    };
-  }, []);
+
+  const currentRide = useMemo<Ride | null>(() => {
+    if (!user) return null;
+    const activeStatuses = [RideStatus.REQUESTED, RideStatus.ACCEPTED, RideStatus.PICKING_UP, RideStatus.IN_PROGRESS];
+
+    if (user.role === UserRole.CUSTOMER) {
+        return rides.find(r => r.customerId === user.id && activeStatuses.includes(r.status)) || null;
+    }
+    if (user.role === UserRole.DRIVER) {
+        return rides.find(r => r.driverId === user.id && activeStatuses.includes(r.status)) || null;
+    }
+    return null;
+  }, [user, rides]);
 
 
   const getEstimatedFare = useCallback((vehicleType: VehicleType, distance: number, duration: number) => {
     const vehiclePricing = pricing[vehicleType];
     if (!vehiclePricing) return 0;
-
     const fare = vehiclePricing.baseFare + (distance * vehiclePricing.perKm) + (duration * vehiclePricing.perMinute);
     return Math.round(fare);
   }, [pricing]);
 
 
-  const requestRide = useCallback((
-        start: { lat: number; lng: number; name: string }, 
-        end: { lat: number; lng: number; name: string },
-        vehicleType: VehicleType,
-        routeInfo: RouteInfo,
-        schedule?: { isScheduled: boolean, time: string }
-    ) => {
+  const requestRide = useCallback((start, end, vehicleType, routeInfo, schedule) => {
     if (!user) return;
-    
     const estimatedFare = getEstimatedFare(vehicleType, routeInfo.distance, routeInfo.duration);
-
     const newRide: Ride = {
       id: `ride_${Date.now()}`,
       customerId: user.id,
       startLocation: start,
       endLocation: end,
       status: RideStatus.REQUESTED,
-      vehicleType: vehicleType,
-      estimatedFare: estimatedFare,
+      vehicleType,
+      estimatedFare,
       distance: routeInfo.distance,
       duration: routeInfo.duration,
       polyline: routeInfo.polyline,
@@ -125,111 +138,111 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       isScheduled: schedule?.isScheduled || false,
       scheduledTime: schedule?.time
     };
-    setRideAndSync(newRide);
-    setLiveTripData(null); // Clear any previous live data
-  }, [user, getEstimatedFare, setRideAndSync]);
+    
+    const updatedRides = [...rides, newRide];
+    setRides(updatedRides);
+    db.write(RIDES_DB_KEY, updatedRides);
+    setLiveTripData(null);
+  }, [user, getEstimatedFare, rides]);
 
-  const acceptRide = useCallback((driver: Driver) => {
-    setRideAndSync(prevRide => {
-      if (prevRide && prevRide.status === RideStatus.REQUESTED) {
-        // Streamline the flow: Accepting a ride immediately means the driver is picking up.
-        return { ...prevRide, status: RideStatus.PICKING_UP, driverId: driver.id };
-      }
-      return prevRide;
-    });
-  }, [setRideAndSync]);
+  const acceptRide = useCallback((rideId: string, driver: Driver) => {
+    const updatedRides = rides.map(r => 
+        r.id === rideId ? { ...r, status: RideStatus.PICKING_UP, driverId: driver.id } : r
+    );
+    setRides(updatedRides);
+    db.write(RIDES_DB_KEY, updatedRides);
+  }, [rides]);
 
-  const rejectRide = useCallback(() => {
-    setRideAndSync(prevRide => {
-      // For the mock, this simply dismisses the ride for the driver.
-      // In a real system, it would go back to a queue.
-      if (prevRide && prevRide.status === RideStatus.REQUESTED) {
-        return null;
-      }
-      return prevRide;
-    });
-  }, [setRideAndSync]);
+  const rejectRide = useCallback((rideId: string) => {
+    const updatedRides = rides.filter(r => r.id !== rideId);
+    setRides(updatedRides);
+    db.write(RIDES_DB_KEY, updatedRides);
+  }, [rides]);
   
-  const updateDriverLocation = useCallback((location: { lat: number; lng: number }) => {
-    setDriverLiveLocation(location);
-  }, []);
+  const updateDriverLocation = useCallback((driverId: string, location: { lat: number; lng: number; heading: number | null}) => {
+    const updatedDrivers = drivers.map(d =>
+      d.id === driverId ? { ...d, location } : d
+    );
+    setDrivers(updatedDrivers);
+    db.write(DRIVERS_DB_KEY, updatedDrivers);
+  }, [drivers]);
 
-  const updateRideStatus = (newStatus: RideStatus) => {
-    setRideAndSync(prev => {
-        if (!prev) return null;
-        if (prev.status === RideStatus.CANCELLED || prev.status === RideStatus.COMPLETED) {
-            return prev;
-        }
-        return { ...prev, status: newStatus };
-    });
+  const updateDriverOnlineStatus = useCallback((driverId: string, isOnline: boolean) => {
+    const updatedDrivers = drivers.map(d =>
+      d.id === driverId ? { ...d, isOnline } : d
+    );
+    setDrivers(updatedDrivers);
+    db.write(DRIVERS_DB_KEY, updatedDrivers);
+  }, [drivers]);
+
+  const updateRideStatus = (rideId: string, newStatus: RideStatus) => {
+    const updatedRides = rides.map(r => r.id === rideId ? { ...r, status: newStatus } : r);
+    setRides(updatedRides);
+    db.write(RIDES_DB_KEY, updatedRides);
   };
 
-  const cancelRide = () => {
-    setRideAndSync(prev => {
-        if (!prev) return null;
-        setDriverLiveLocation(null);
-        setTimeout(() => {
-            setRideAndSync(null);
-            setLiveTripData(null);
-        }, 3000);
-        return { ...prev, status: RideStatus.CANCELLED };
-    });
+  const cancelRide = (rideId: string) => {
+    const updatedRides = rides.map(r => r.id === rideId ? { ...r, status: RideStatus.CANCELLED } : r);
+    setRides(updatedRides);
+    db.write(RIDES_DB_KEY, updatedRides);
+    // Cleanup cancelled/completed rides after a delay to show the final status
+    setTimeout(() => {
+        const finalRides = (db.read<Ride[]>(RIDES_DB_KEY) || []).filter(r => r.id !== rideId);
+        setRides(finalRides);
+        db.write(RIDES_DB_KEY, finalRides);
+    }, 5000);
   };
 
-  const completeRide = () => {
-    setRideAndSync(prevRide => {
-        if (!prevRide) return null;
+  const completeRide = (rideId: string) => {
+    const rideToComplete = rides.find(r => r.id === rideId);
+    if (!rideToComplete) return;
 
-        const finalFare = liveTripData?.currentFare ?? getEstimatedFare(prevRide.vehicleType, prevRide.distance, prevRide.duration + Math.random() * 5);
-        setDriverLiveLocation(null);
-        setTimeout(() => {
-            setRideAndSync(null);
-            setLiveTripData(null);
-        }, 5000);
-        
-        return {
-            ...prevRide,
-            status: RideStatus.COMPLETED,
-            finalFare,
-            completedAt: new Date().toISOString()
-        };
-    });
+    const finalFare = liveTripData?.currentFare ?? getEstimatedFare(rideToComplete.vehicleType, rideToComplete.distance, rideToComplete.duration + Math.random() * 5);
+    
+    const updatedRides = rides.map(r => r.id === rideId ? {
+        ...r,
+        status: RideStatus.COMPLETED,
+        finalFare,
+        completedAt: new Date().toISOString()
+    } : r);
+    
+    setRides(updatedRides);
+    db.write(RIDES_DB_KEY, updatedRides);
+    
+    setTimeout(() => {
+        const finalRides = (db.read<Ride[]>(RIDES_DB_KEY) || []).filter(r => r.id !== rideId);
+        setRides(finalRides);
+        db.write(RIDES_DB_KEY, finalRides);
+    }, 5000);
   };
   
-  // Effect to manage the live trip timer
+  // Effect to manage the live trip timer for the current user's ride
   useEffect(() => {
-    if (ride?.status === RideStatus.IN_PROGRESS) {
+    if (currentRide?.status === RideStatus.IN_PROGRESS) {
       if (!tripIntervalRef.current) {
         tripStartTimeRef.current = new Date();
-        
-        // Set initial state for the meter
         setLiveTripData({
           distanceTraveled: 0,
           timeElapsed: 0,
-          currentFare: pricing[ride.vehicleType].baseFare,
+          currentFare: pricing[currentRide.vehicleType].baseFare,
         });
 
-        const totalDistance = ride.distance;
-        const totalDurationInSeconds = ride.duration * 60;
+        const totalDistance = currentRide.distance;
+        const totalDurationInSeconds = currentRide.duration * 60;
 
         tripIntervalRef.current = window.setInterval(() => {
-          if (!tripStartTimeRef.current || !ride || ride.status !== RideStatus.IN_PROGRESS) {
-              if (tripIntervalRef.current) {
-                clearInterval(tripIntervalRef.current);
-                tripIntervalRef.current = null;
-              }
+          if (!tripStartTimeRef.current || !currentRide || currentRide.status !== RideStatus.IN_PROGRESS) {
+              if (tripIntervalRef.current) clearInterval(tripIntervalRef.current);
+              tripIntervalRef.current = null;
               return;
           }
           
           const now = new Date();
           const timeElapsed = (now.getTime() - tripStartTimeRef.current.getTime()) / 1000;
-
-          // Simulate distance based on time progress for a smooth meter
           const progressRatio = totalDurationInSeconds > 0 ? Math.min(1, timeElapsed / totalDurationInSeconds) : 1;
           const distanceTraveled = totalDistance * progressRatio;
 
-          // Calculate current fare
-          const vehiclePricing = pricing[ride.vehicleType];
+          const vehiclePricing = pricing[currentRide.vehicleType];
           const distanceFare = distanceTraveled * vehiclePricing.perKm;
           const timeFare = (timeElapsed / 60) * vehiclePricing.perMinute;
           const currentFare = vehiclePricing.baseFare + distanceFare + timeFare;
@@ -242,30 +255,44 @@ export const RideProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }, 1000);
       }
     } else {
-      // Cleanup: Stop the timer if ride is not in progress
       if (tripIntervalRef.current) {
         clearInterval(tripIntervalRef.current);
         tripIntervalRef.current = null;
         tripStartTimeRef.current = null;
+        if (liveTripData) setLiveTripData(null);
       }
     }
-
-    // Main cleanup function for the effect
     return () => {
-      if (tripIntervalRef.current) {
-        clearInterval(tripIntervalRef.current);
-        tripIntervalRef.current = null;
-      }
+      if (tripIntervalRef.current) clearInterval(tripIntervalRef.current);
     };
-  }, [ride, pricing]);
+  }, [currentRide, pricing, liveTripData]);
 
 
   const updatePricing = (newPricing: PricingSettings) => {
       setPricing(newPricing);
   };
+  
+  const value = {
+      currentRide,
+      availableRides: rides.filter(r => r.status === RideStatus.REQUESTED),
+      allRides: rides,
+      onlineDrivers: drivers.filter(d => d.isOnline && d.location),
+      liveTripData,
+      pricing,
+      requestRide,
+      acceptRide,
+      rejectRide,
+      cancelRide,
+      completeRide,
+      updatePricing,
+      getEstimatedFare,
+      updateRideStatus,
+      updateDriverLocation,
+      updateDriverOnlineStatus,
+  };
 
   return (
-    <RideContext.Provider value={{ ride, driverLiveLocation, liveTripData, pricing, requestRide, acceptRide, rejectRide, cancelRide, completeRide, updatePricing, getEstimatedFare, updateRideStatus, updateDriverLocation }}>
+    <RideContext.Provider value={value}>
       {children}
     </RideContext.Provider>
   );
