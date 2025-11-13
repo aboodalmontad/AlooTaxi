@@ -36,22 +36,30 @@ export const getHaversineDistance = (
   return R * c; // Distance in km
 };
 
+/**
+ * Checks if a location object has valid, non-zero coordinates.
+ * @param loc - The location object to check.
+ * @returns True if the location is valid, false otherwise.
+ */
+export const isValidLocation = (loc: { lat: number; lng: number } | null | undefined): loc is { lat: number; lng: number } => {
+    return !!(
+        loc &&
+        typeof loc.lat === 'number' && !isNaN(loc.lat) &&
+        typeof loc.lng === 'number' && !isNaN(loc.lng) &&
+        (loc.lat !== 0 || loc.lng !== 0)
+    );
+};
+
 
 export const getRoute = async (
   start: { lat: number, lng: number },
   end: { lat: number, lng: number }
 ): Promise<RouteInfo> => {
-  // Defensive checks for coordinates
-  if (!start || !end || typeof start.lat !== 'number' || typeof start.lng !== 'number' || typeof end.lat !== 'number' || typeof end.lng !== 'number') {
+  // Enhanced defensive checks for coordinates using the new helper
+  if (!isValidLocation(start) || !isValidLocation(end)) {
       const errorMsg = "إحداثيات بداية أو نهاية غير صالحة.";
       console.error("getRoute validation failed: Invalid coordinates provided.", { start, end });
       return Promise.reject(new Error(errorMsg));
-  }
-  // Prevent calls with (0,0) which is a common cause for large distance errors
-  if ((start.lat === 0 && start.lng === 0) || (end.lat === 0 && end.lng === 0)) {
-    const errorMsg = "تم اكتشاف إحداثيات غير صالحة (0,0). تم إيقاف حساب المسار.";
-    console.error("getRoute aborted due to (0,0) coordinate:", { start, end });
-    return Promise.reject(new Error(errorMsg));
   }
   
   // Pre-flight distance check to prevent pointless API calls that will surely fail.

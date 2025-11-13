@@ -4,7 +4,7 @@ import { useRide } from '../contexts/RideContext';
 import InteractiveMap, { RouteStyle } from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
 import { RideStatus, Driver, RouteInfo, Ride, SyrianProvinces } from '../types';
-import { getRoute, getHaversineDistance } from '../services/mapService';
+import { getRoute, getHaversineDistance, isValidLocation } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
 import { useDriverTracking } from '../hooks/useDriverTracking';
 import NavigationUI from '../components/NavigationUI';
@@ -43,6 +43,8 @@ const DriverPage: React.FC = () => {
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('locked');
   const routeCalculationTimeoutRef = useRef<number | null>(null);
   const notifiedRideIdRef = useRef<string | null>(null);
+  const locationWatchIdRef = useRef<number | null>(null);
+  const latestPositionRef = useRef<GeolocationPosition | null>(null);
   
   const driver = user as Driver;
 
@@ -60,10 +62,19 @@ const DriverPage: React.FC = () => {
     setDriverLocation(null);
     setLocationError(null);
     setLocationWarning(null);
+    latestPositionRef.current = null; // Reset for new attempt
 
     const province = driver?.province || SyrianProvinces.DAMASCUS;
     const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
     const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1], heading: null };
+    
+    const clearWatch = () => {
+        if (locationWatchIdRef.current !== null) {
+            navigator.geolocation.clearWatch(locationWatchIdRef.current);
+            locationWatchIdRef.current = null;
+        }
+    };
+    clearWatch();
 
     if (!navigator.geolocation) {
         setDriverLocation(fallbackLocation);
@@ -73,72 +84,75 @@ const DriverPage: React.FC = () => {
         setIsOnline(false);
         return;
     }
+    
+    const locationTimeout = setTimeout(() => {
+        clearWatch();
+        const lastPosition = latestPositionRef.current;
 
-    const setFinalLocation = (position: GeolocationPosition) => {
-        const { latitude, longitude, heading } = position.coords;
+        if (lastPosition) {
+            const { latitude, longitude, heading, accuracy } = lastPosition.coords;
+            const newLocation = { lat: latitude, lng: longitude, heading };
+            setLocationWarning(`تم استخدام موقع تقريبي بدقة (${Math.round(accuracy)} متر). حاول الانتقال لمكان مفتوح.`);
+            setDriverLocation(newLocation);
+            if (driver) updateDriverLocation(driver.id, newLocation);
+            setLocationError(null);
+        } else {
+            setLocationError("انتهت مهلة تحديد الموقع. قد تكون إشارة GPS ضعيفة أو أن خدمات الموقع معطلة في جهازك. سيتم استخدام موقع افتراضي.");
+            setDriverLocation(fallbackLocation);
+            if (driver) updateDriverLocation(driver.id, fallbackLocation);
+        }
+        if (isManualRequest) setIsManualLocating(false);
+    }, 25000);
+
+    const successCallback = (position: GeolocationPosition) => {
+        latestPositionRef.current = position;
+        const { latitude, longitude, heading, accuracy } = position.coords;
+        
+        if (accuracy > 100) {
+            setLocationWarning(`دقة الموقع منخفضة (${Math.round(accuracy)} متر). ننتظر إشارة أفضل...`);
+            return; // Keep watching
+        }
+        
+        clearTimeout(locationTimeout);
+        clearWatch();
+
         const newLocation = { lat: latitude, lng: longitude, heading };
+        
+        setLocationWarning(null);
         setDriverLocation(newLocation);
         if (driver) updateDriverLocation(driver.id, newLocation);
         setLocationError(null);
-        setLocationWarning(null);
         if (isManualRequest) setIsManualLocating(false);
     };
-
-    const finalErrorHandler = (error: GeolocationPositionError) => {
-        let message = "";
-        let forceOffline = false;
-        switch (error.code) {
-            case error.PERMISSION_DENIED:
-                message = "تم رفض إذن الوصول إلى الموقع. يجب تفعيله للعمل كسائق.";
-                forceOffline = true;
-                break;
-            case error.POSITION_UNAVAILABLE: message = "تعذر تحديد موقعك. سيتم استخدام موقع افتراضي."; break;
-            case error.TIMEOUT: message = "انتهت مهلة طلب تحديد الموقع."; break;
-            default: message = "حدث خطأ غير متوقع."; break;
+    
+    const errorCallback = (error: GeolocationPositionError) => {
+        if (error.code === error.PERMISSION_DENIED) {
+            clearTimeout(locationTimeout);
+            clearWatch();
+            setLocationError("تم رفض إذن الوصول إلى الموقع. يجب تفعيله للعمل كسائق. سيتم استخدام موقع افتراضي.");
+            setDriverLocation(fallbackLocation);
+            if (driver) updateDriverLocation(driver.id, fallbackLocation);
+            if (isManualRequest) setIsManualLocating(false);
+            setIsOnline(false);
         }
-        
-        setDriverLocation(fallbackLocation);
-        if (driver) updateDriverLocation(driver.id, fallbackLocation);
-        setLocationError(message);
-        if (isManualRequest) setIsManualLocating(false);
-        if (forceOffline) setIsOnline(false);
     };
 
-    // Step 1: Try for a quick, network-based location
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-            const { latitude, longitude, heading } = position.coords;
-            const quickLocation = { lat: latitude, lng: longitude, heading };
-            setDriverLocation(quickLocation);
-            if (driver) updateDriverLocation(driver.id, quickLocation);
-            setLocationWarning("جاري تحسين دقة الموقع...");
-
-            // Step 2: Now try for a high-accuracy position in the background.
-            navigator.geolocation.getCurrentPosition(
-                (highAccuracyPosition) => {
-                    setFinalLocation(highAccuracyPosition);
-                },
-                (highAccuracyError) => {
-                    console.warn("High-accuracy failed, using initial position.", highAccuracyError);
-                    setLocationWarning("تعذر الحصول على موقع عالي الدقة. التتبع المستمر سيحاول مجدداً.");
-                    if (isManualRequest) setIsManualLocating(false);
-                },
-                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-            );
-        },
-        (lowAccuracyError) => {
-            // The quick attempt failed, try a single, more patient high-accuracy attempt.
-            console.warn("Low-accuracy failed, trying high-accuracy directly.", lowAccuracyError);
-            navigator.geolocation.getCurrentPosition(
-                setFinalLocation,
-                finalErrorHandler,
-                { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-            );
-        },
-        { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+    locationWatchIdRef.current = navigator.geolocation.watchPosition(
+        successCallback,
+        errorCallback,
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
   }, [driver, updateDriverLocation]);
   
+  // Cleanup effect for the location watch
+  useEffect(() => {
+    return () => {
+      if (locationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(locationWatchIdRef.current);
+      }
+    };
+  }, []);
+
   // Effect for initial location fetch
   useEffect(() => {
     if (isOnline && !driverLocation && !isManualLocating) {
@@ -199,12 +213,17 @@ const DriverPage: React.FC = () => {
   useEffect(() => {
     if (viewingRideRequest && driverLocation && isOnline) {
       const calculatePickupRoute = async () => {
-        try {
-          const route = await getRoute(driverLocation, viewingRideRequest.startLocation);
-          setPickupRouteInfo(route);
-        } catch (err) {
-          console.error("Failed to calculate route to pickup:", err);
-          setPickupRouteInfo(null);
+        if (isValidLocation(driverLocation) && isValidLocation(viewingRideRequest.startLocation)) {
+            try {
+              const route = await getRoute(driverLocation, viewingRideRequest.startLocation);
+              setPickupRouteInfo(route);
+            } catch (err) {
+              console.error("Failed to calculate route to pickup:", err instanceof Error ? err.message : err);
+              setPickupRouteInfo(null);
+            }
+        } else {
+            console.warn("Skipping pickup route calculation due to invalid location(s).", { driver: driverLocation, start: viewingRideRequest.startLocation });
+            setPickupRouteInfo(null);
         }
       };
       calculatePickupRoute();
@@ -238,14 +257,18 @@ const DriverPage: React.FC = () => {
             const newRouteLegs: RouteStyle[] = [];
 
             if (currentRide.status === RideStatus.PICKING_UP) {
-                const pickupRoute = await getRoute(driverLocation, currentRide.startLocation);
-                newRouteLegs.push({ polyline: pickupRoute.polyline, color: '#3b82f6', casingColor: '#022c7a' });
+                if (isValidLocation(driverLocation) && isValidLocation(currentRide.startLocation)) {
+                    const pickupRoute = await getRoute(driverLocation, currentRide.startLocation);
+                    newRouteLegs.push({ polyline: pickupRoute.polyline, color: '#3b82f6', casingColor: '#022c7a' });
+                }
                 if (currentRide.polyline) {
                     newRouteLegs.push({ polyline: currentRide.polyline, color: '#8b5cf6', casingColor: '#4c1d95', opacity: 0.75 });
                 }
             } else if (currentRide.status === RideStatus.IN_PROGRESS) {
-                const dropoffRoute = await getRoute(driverLocation, currentRide.endLocation);
-                newRouteLegs.push({ polyline: dropoffRoute.polyline, color: '#3b82f6', casingColor: '#022c7a' });
+                if (isValidLocation(driverLocation) && isValidLocation(currentRide.endLocation)) {
+                    const dropoffRoute = await getRoute(driverLocation, currentRide.endLocation);
+                    newRouteLegs.push({ polyline: dropoffRoute.polyline, color: '#3b82f6', casingColor: '#022c7a' });
+                }
             } else {
                 setRouteLegs([]);
                 return;
@@ -278,14 +301,21 @@ const DriverPage: React.FC = () => {
     const calculateLegRoute = async () => {
       try {
         const legDestination = currentRide.status === RideStatus.IN_PROGRESS ? currentRide.endLocation : currentRide.startLocation;
-        const distance = getHaversineDistance(driverLocation, legDestination);
-        if (distance > 200) {
-            setCurrentLegInfo(null); setNavigationRoute(null); return;
+        
+        if (isValidLocation(driverLocation) && isValidLocation(legDestination)) {
+            const distance = getHaversineDistance(driverLocation, legDestination);
+            if (distance > 200) {
+                setCurrentLegInfo(null); setNavigationRoute(null); return;
+            }
+            const route = await getRoute(driverLocation, legDestination);
+            setCurrentLegInfo(route);
+            setNavigationRoute(route);
+            if(routeError) setRouteError(null);
+        } else {
+            console.warn("Skipping driver nav route calculation due to invalid location(s).", { driver: driverLocation, dest: legDestination });
+            setCurrentLegInfo(null);
+            setNavigationRoute(null);
         }
-        const route = await getRoute(driverLocation, legDestination);
-        setCurrentLegInfo(route);
-        setNavigationRoute(route);
-        if(routeError) setRouteError(null);
       } catch (error) {
         setCurrentLegInfo(null); setNavigationRoute(null);
         console.error("Failed to calculate live leg route:", error);

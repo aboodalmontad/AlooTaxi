@@ -4,7 +4,7 @@ import { useRide } from '../contexts/RideContext';
 import InteractiveMap from '../components/InteractiveMap';
 import { DAMASCUS_COORDS, VEHICLE_TYPES, PROVINCE_COORDS, SYRIAN_PROVINCES } from '../constants';
 import { RideStatus, RouteInfo, VehicleType, LocationSuggestion, Ride, SyrianProvinces, Driver } from '../types';
-import { getRoute, searchLocations, getHaversineDistance } from '../services/mapService';
+import { getRoute, searchLocations, getHaversineDistance, isValidLocation } from '../services/mapService';
 import LiveTripDisplay from '../components/LiveTripDisplay';
 import NavigationUI from '../components/NavigationUI';
 
@@ -66,6 +66,8 @@ const CustomerPage: React.FC = () => {
   const [scheduledTime, setScheduledTime] = useState('');
 
   const prevRideRef = useRef<Ride | null>();
+  const locationWatchIdRef = useRef<number | null>(null);
+  const latestPositionRef = useRef<GeolocationPosition | null>(null);
 
   const userProvince = user?.province || SyrianProvinces.DAMASCUS;
   const provinceCenter = useMemo(() => ({
@@ -88,12 +90,20 @@ const CustomerPage: React.FC = () => {
     setRouteError(null);
     setLocationError(null);
     setLocationWarning(null);
+    latestPositionRef.current = null; // Reset for the new fetch attempt
 
     const province = user?.province || SyrianProvinces.DAMASCUS;
     const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
     const provinceName = SYRIAN_PROVINCES.find(p => p.id === province)?.ar || 'دمشق';
-    
     const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1], name: `وسط ${provinceName}`, heading: null };
+    
+    const clearWatch = () => {
+        if (locationWatchIdRef.current !== null) {
+            navigator.geolocation.clearWatch(locationWatchIdRef.current);
+            locationWatchIdRef.current = null;
+        }
+    };
+    clearWatch();
 
     if (!navigator.geolocation) {
         setStartLocation(fallbackLocation);
@@ -103,68 +113,68 @@ const CustomerPage: React.FC = () => {
         return;
     }
 
-    const setFinalLocation = (position: GeolocationPosition, name: string) => {
-        const { latitude, longitude, heading } = position.coords;
-        const newLocation = { lat: latitude, lng: longitude, name, heading };
+    const locationTimeout = setTimeout(() => {
+        clearWatch();
+        const lastPosition = latestPositionRef.current;
+        if (lastPosition) {
+            // We have a position, but it must have been inaccurate. Use it but with a persistent warning.
+            const { latitude, longitude, heading, accuracy } = lastPosition.coords;
+            const newLocation = { lat: latitude, lng: longitude, name: "موقع تقريبي", heading };
+            setLocationWarning(`تم استخدام موقع تقريبي بدقة (${Math.round(accuracy)} متر). حاول الانتقال إلى مكان مفتوح للحصول على دقة أفضل.`);
+            setLocationError(null);
+            setStartLocation(newLocation);
+            setStartQuery(newLocation.name);
+            setIsLocating(false);
+        } else {
+            // We received no position at all. Timeout with an error.
+            setLocationError("انتهت مهلة تحديد الموقع. قد تكون إشارة GPS ضعيفة أو أن خدمات الموقع معطلة في جهازك. سيتم استخدام موقع افتراضي.");
+            setStartLocation(fallbackLocation);
+            setStartQuery(fallbackLocation.name);
+            setIsLocating(false);
+        }
+    }, 25000); // 25 seconds total
+
+    const successCallback = (position: GeolocationPosition) => {
+        latestPositionRef.current = position; // Always store the latest position
+        const { latitude, longitude, heading, accuracy } = position.coords;
+
+        if (accuracy > 100) {
+            setLocationWarning(`دقة الموقع منخفضة (${Math.round(accuracy)} متر). ننتظر إشارة أفضل...`);
+            return; // Continue waiting for a better signal
+        }
+
+        // Accuracy is good!
+        clearTimeout(locationTimeout);
+        clearWatch();
+        
+        const newLocation = { lat: latitude, lng: longitude, name: "موقعي الحالي", heading };
+        
+        setLocationWarning(null); // Clear any previous warning
         setStartLocation(newLocation);
-        setStartQuery(name);
+        setStartQuery(newLocation.name);
         setLocationError(null);
-        setLocationWarning(null);
         setIsLocating(false);
         setMapViewMode('locked');
     };
 
-    const finalErrorHandler = (error: GeolocationPositionError) => {
-        let message = "";
-        switch (error.code) {
-            case error.PERMISSION_DENIED: message = "تم رفض إذن الوصول إلى الموقع. يرجى تفعيله من إعدادات المتصفح."; break;
-            case error.POSITION_UNAVAILABLE: message = "تعذر تحديد موقعك الحالي. قد تكون إشارة GPS أو الشبكة ضعيفة."; break;
-            case error.TIMEOUT: message = "انتهت مهلة طلب تحديد الموقع."; break;
-            default: message = "حدث خطأ غير متوقع."; break;
+    const errorCallback = (error: GeolocationPositionError) => {
+        if (error.code === error.PERMISSION_DENIED) {
+            clearTimeout(locationTimeout);
+            clearWatch();
+            setLocationError("تم رفض إذن الوصول إلى الموقع. يرجى تفعيله من إعدادات المتصفح. سيتم استخدام موقع افتراضي.");
+            setStartLocation(fallbackLocation);
+            setStartQuery(fallbackLocation.name);
+            setIsLocating(false);
         }
-        setStartLocation(fallbackLocation);
-        setStartQuery(fallbackLocation.name);
-        setLocationError(`${message} سيتم استخدام موقع افتراضي.`);
-        setIsLocating(false);
     };
 
-    // Step 1: Try for a quick, network-based location
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-            // Got a quick position, show it and then try to improve it.
-            const { latitude, longitude, heading } = position.coords;
-            setStartLocation({ lat: latitude, lng: longitude, name: "موقع تقريبي...", heading });
-            setStartQuery("موقع تقريبي...");
-            setLocationWarning("جاري تحسين دقة الموقع...");
-            setMapViewMode('locked');
-
-            // Step 2: Now try for a high-accuracy position in the background.
-            navigator.geolocation.getCurrentPosition(
-                (highAccuracyPosition) => {
-                    setFinalLocation(highAccuracyPosition, "موقعي الحالي");
-                },
-                (highAccuracyError) => {
-                    console.warn("High-accuracy failed, using initial position.", highAccuracyError);
-                    setFinalLocation(position, "موقعي الحالي (دقة شبكة)");
-                },
-                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-            );
-        },
-        (lowAccuracyError) => {
-            // The quick attempt failed, let's try a single, more patient high-accuracy attempt.
-            console.warn("Low-accuracy failed, trying high-accuracy directly.", lowAccuracyError);
-            setStartQuery("...جاري الحصول على موقع دقيق");
-            navigator.geolocation.getCurrentPosition(
-                (position) => {
-                    setFinalLocation(position, "موقعي الحالي");
-                },
-                finalErrorHandler, // If this last attempt fails, show the final error.
-                { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-            );
-        },
-        { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+    locationWatchIdRef.current = navigator.geolocation.watchPosition(
+        successCallback,
+        errorCallback,
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
 }, [user]);
+
 
   const resetJourney = useCallback(() => {
       setStartLocation(null);
@@ -183,6 +193,14 @@ const CustomerPage: React.FC = () => {
       setNavigationRoute(null);
   }, []);
 
+  // Cleanup effect for the location watch
+  useEffect(() => {
+    return () => {
+      if (locationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(locationWatchIdRef.current);
+      }
+    };
+  }, []);
 
   // Effect to get initial user location on component mount or after a reset
   useEffect(() => {
@@ -261,7 +279,7 @@ const CustomerPage: React.FC = () => {
   // Effect to calculate route when both locations are set
   useEffect(() => {
     const calculateRoute = async () => {
-        if (startLocation && endLocation) {
+        if (isValidLocation(startLocation) && isValidLocation(endLocation)) {
             setIsLoadingRoute(true);
             setRouteInfo(null); // Clear previous route
             setRouteError(null); // Clear previous error
@@ -299,8 +317,8 @@ const CustomerPage: React.FC = () => {
 
     const calculateNavRoute = async () => {
         try {
-            let origin = startLocation;
-            let destination = currentRide.endLocation;
+            let origin: { lat: number; lng: number; } | null | undefined = startLocation;
+            let destination: { lat: number; lng: number; } | null | undefined = currentRide.endLocation;
 
             if (currentRide.status === RideStatus.PICKING_UP && driverLocation) {
                 // For customer, nav route is from driver to them, until pickup
@@ -311,11 +329,17 @@ const CustomerPage: React.FC = () => {
                 origin = startLocation;
                 destination = currentRide.endLocation;
             } else {
+                setNavigationRoute(null);
                 return;
             }
 
-            const route = await getRoute(origin, destination);
-            setNavigationRoute(route);
+            if (isValidLocation(origin) && isValidLocation(destination)) {
+                const route = await getRoute(origin, destination);
+                setNavigationRoute(route);
+            } else {
+                console.warn("Customer nav route calculation skipped due to invalid location(s).", { origin, destination });
+                setNavigationRoute(null);
+            }
 
         } catch (error) {
             console.error("Customer nav route calculation failed:", error);
@@ -511,184 +535,196 @@ const CustomerPage: React.FC = () => {
              <button
                 onClick={() => setMapViewMode(mapViewMode === 'navigation' ? 'locked' : 'navigation')}
                 disabled={typeof startLocation?.heading !== 'number'}
-                className={`w-12 h-12 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl shadow-lg transition-colors ${mapViewMode === 'navigation' ? 'bg-primary text-white' : 'bg-slate-800/80 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}
-                aria-label="تبديل وضع الملاحة"
-                title={typeof startLocation?.heading !== 'number' ? 'وضع الملاحة غير متاح (تحرك لعرض الاتجاه)' : 'تبديل وضع الملاحة'}
+                className={`w-12 h-12 rounded-full flex items-center justify-center text-3xl shadow-lg
+                    ${mapViewMode === 'navigation' ? 'bg-primary text-white' : 'bg-slate-800/80 backdrop-blur-sm hover:bg-slate-700'}
+                    disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label="وضع الملاحة"
+                title="وضع الملاحة"
             >
                 🧭
             </button>
         </div>
 
-        <InteractiveMap 
-          center={mapCenterCoords}
-          userLocation={startLocation ?? undefined}
-          driverLocation={assignedDriver?.location ?? undefined}
-          startLocation={currentRide?.status !== RideStatus.IDLE ? currentRide?.startLocation : startLocation ?? undefined}
-          endLocation={currentRide?.status !== RideStatus.IDLE ? currentRide?.endLocation : endLocation ?? undefined}
-          routes={mapRoutes}
-          onCenterChange={setMapCenter}
-          disableAutoPanZoom={mapViewMode !== 'locked' || !!pinDropMode || canNavigate}
-          onUserInteraction={handleUserInteraction}
-          navigationMode={{
-              enabled: canNavigate,
-              bearing: startLocation?.heading ?? 0,
-          }}
-        />
-      </div>
-
-      {/* --- START: Pin Drop UI --- */}
-      {pinDropMode && (
-        <>
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-full z-10 pointer-events-none">
-                <div className="relative flex flex-col items-center animate-bounce">
-                    <span className="text-5xl drop-shadow-lg">📍</span>
-                    <div className="w-3 h-3 bg-black/30 rounded-full shadow-md -mt-2"></div>
-                </div>
-            </div>
-
-            <div className="absolute bottom-0 left-0 right-0 p-4 bg-slate-800/90 backdrop-blur-sm z-20 rounded-t-2xl shadow-lg animate-fade-in-up">
-                <p className="text-center text-slate-300 mb-3">حرّك الخريطة لوضع الدبوس في الموقع المطلوب ثم اضغط تأكيد.</p>
-                <div className="flex gap-4">
-                    <button onClick={handleConfirmPinDrop} className="flex-1 py-3 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">
-                        تأكيد الموقع
-                    </button>
-                    <button onClick={() => setPinDropMode(null)} className="flex-1 py-3 bg-slate-600 text-white rounded-lg hover:bg-slate-500">
-                        إلغاء
-                    </button>
-                </div>
-            </div>
-        </>
-      )}
-      {/* --- END: Pin Drop UI --- */}
-
-      {/* --- Booking Panel --- */}
-      { !currentRide && !pinDropMode &&
-      <div 
-        className="absolute bottom-0 right-0 left-0 z-10 transition-transform duration-300 ease-in-out"
-        style={{ transform: isPanelExpanded ? 'translateY(0)' : 'translateY(calc(100% - 60px))' }}
-      >
-        <div className="bg-slate-800/90 backdrop-blur-sm shadow-2xl rounded-t-2xl">
-            <div 
-                className="w-full h-[60px] flex items-center justify-center cursor-pointer group"
-                onClick={() => setIsPanelExpanded(!isPanelExpanded)}
-                role="button"
-                aria-expanded={isPanelExpanded}
-                aria-label={isPanelExpanded ? "إخفاء لوحة الطلب" : "إظهار لوحة الطلب"}
+        <div className={`absolute inset-0 transition-transform duration-500 ease-in-out ${canNavigate ? 'navigation-view' : ''}`}>
+           <InteractiveMap
+                center={mapCenterCoords}
+                zoom={15}
+                startLocation={currentRide?.startLocation || startLocation || undefined}
+                endLocation={currentRide?.endLocation || endLocation || undefined}
+                userLocation={startLocation || undefined}
+                driverLocation={assignedDriver?.location}
+                routes={mapRoutes}
+                navigationMode={{ enabled: canNavigate, bearing: startLocation?.heading ?? 0 }}
+                onCenterChange={pinDropMode ? setMapCenter : undefined}
+                disableAutoPanZoom={mapViewMode !== 'locked' || pinDropMode !== null || canNavigate}
+                onUserInteraction={handleUserInteraction}
             >
-                <div className="w-10 h-1 bg-slate-500 rounded-full group-hover:bg-primary transition-colors"></div>
-            </div>
-            
-            <div className="p-4 pt-0">
-              {currentStep === 'setDestination' && (
-                  <div className="space-y-3">
-                      <h2 className="text-lg font-semibold text-center">اطلب رحلتك الآن</h2>
-                       <div className="relative">
-                           <input 
-                               type="text"
-                               value={startQuery}
-                               onChange={e => {
-                                   setStartQuery(e.target.value);
-                                   setRouteError(null);
-                                   setLocationError(null);
-                                   setLocationWarning(null);
-                               }}
-                               onFocus={() => setActiveInput('start')}
-                               placeholder="نقطة الانطلاق"
-                               className="w-full p-3 pl-20 bg-slate-700 rounded-lg"
-                               disabled={isLocating}
-                           />
-                           <div className="absolute left-1 top-1/2 -translate-y-1/2 flex items-center">
-                                <button onClick={() => setPinDropMode('start')} className="p-2 text-2xl" title="تحديد على الخريطة">📍</button>
-                                <button onClick={() => fetchUserLocation(true)} disabled={isLocating} className="p-2 text-2xl" title="تحديد موقعي الحالي">🎯</button>
-                           </div>
-                           {activeInput === 'start' && startSuggestions.length > 0 && (
-                               <ul className="absolute bottom-full left-0 right-0 bg-slate-600 rounded-lg shadow-lg z-20 max-h-40 overflow-y-auto mb-1">
-                                   {startSuggestions.map(s => <li key={s.name + s.coordinates.lat} onClick={() => handleSuggestionSelect(s, 'start')} className="p-2 hover:bg-primary cursor-pointer">{s.name}</li>)}
-                               </ul>
-                           )}
-                       </div>
-                       <div className="relative">
-                           <input 
-                               type="text"
-                               value={endQuery}
-                               onChange={e => {
-                                   setEndQuery(e.target.value);
-                                   setRouteError(null);
-                               }}
-                               onFocus={() => setActiveInput('end')}
-                               placeholder="إلى أين تريد الذهاب؟"
-                               className="w-full p-3 pl-12 bg-slate-700 rounded-lg"
-                           />
-                           <button onClick={() => setPinDropMode('end')} className="absolute left-1 top-1/2 -translate-y-1/2 p-2 text-2xl" title="تحديد على الخريطة">📍</button>
-                           {activeInput === 'end' && endSuggestions.length > 0 && (
-                               <ul className="absolute bottom-full left-0 right-0 bg-slate-600 rounded-lg shadow-lg z-20 max-h-40 overflow-y-auto mb-1">
-                                   {endSuggestions.map(s => <li key={s.name + s.coordinates.lat} onClick={() => handleSuggestionSelect(s, 'end')} className="p-2 hover:bg-primary cursor-pointer">{s.name}</li>)}
-                               </ul>
-                           )}
-                       </div>
-                       { isLoadingRoute && <p className="text-center text-slate-300">جاري حساب المسار...</p> }
-                       { routeError && <p className="text-center text-red-400 mt-2">{routeError}</p>}
-                  </div>
-              )}
-
-              {currentStep === 'selectVehicle' && routeInfo && (
-                  <div>
-                      <h2 className="text-lg font-semibold mb-3 text-center">اختر وسيلة النقل</h2>
-                      <div className="flex overflow-x-auto space-x-3 rtl:space-x-reverse pb-3 scrollbar-hide">
-                          {VEHICLE_TYPES.map(v => {
-                              const fare = getEstimatedFare(v.id, routeInfo.distance, routeInfo.duration);
-                              return (
-                                <button 
-                                    key={v.id} 
-                                    onClick={() => handleVehicleSelect(v.id)} 
-                                    className={`flex-shrink-0 w-28 text-center p-3 rounded-xl transition-all duration-200 transform hover:-translate-y-1 bg-slate-700/80 hover:bg-slate-600/80`}
-                                  >
-                                      <span className="text-4xl">{v.icon}</span>
-                                      <p className="mt-1 font-semibold">{v.ar}</p>
-
-                                      <p className="text-sm text-slate-300">{fare.toLocaleString('ar-SY', { style: 'currency', currency: 'SYP', minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
-                                </button>
-                              );
-                          })}
-                      </div>
-                      <button onClick={() => { setEndLocation(null); setEndQuery(''); setRouteInfo(null); setCurrentStep('setDestination'); }} className="w-full mt-2 py-2 text-sm text-slate-300 hover:text-white">العودة</button>
-                  </div>
-              )}
-
-              {currentStep === 'confirmRequest' && routeInfo && selectedVehicle && (
-                  <div className="text-center">
-                      <h2 className="text-lg font-semibold mb-2">تأكيد الطلب</h2>
-                      <div className="bg-slate-700 p-3 rounded-lg text-right space-y-1 mb-3">
-                          <p><span className="font-semibold">من:</span> {startLocation?.name}</p>
-                          <p><span className="font-semibold">إلى:</span> {endLocation?.name}</p>
-                          <p><span className="font-semibold">المركبة:</span> {VEHICLE_TYPES.find(v => v.id === selectedVehicle)?.ar}</p>
-                          <p><span className="font-semibold">الأجرة التقديرية:</span> {getEstimatedFare(selectedVehicle, routeInfo.distance, routeInfo.duration).toLocaleString('ar-SY', { style: 'currency', currency: 'SYP', minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
-                      </div>
-                      
-                      <div className="flex items-center justify-center my-3">
-                          <input type="checkbox" id="schedule" checked={isScheduling} onChange={(e) => setIsScheduling(e.target.checked)} className="h-4 w-4 text-primary bg-slate-600 border-slate-500 rounded focus:ring-primary"/>
-                          <label htmlFor="schedule" className="mr-2 text-sm">جدولة الرحلة لوقت لاحق؟</label>
-                      </div>
-
-                      {isScheduling && (
-                          <input 
-                              type="datetime-local" 
-                              value={scheduledTime}
-                              onChange={e => setScheduledTime(e.target.value)}
-                              className="w-full p-2 bg-slate-700 rounded-lg mb-3"
-                          />
-                      )}
-
-                      <button onClick={handleRequestRide} className="w-full py-3 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark">
-                          {isScheduling ? 'جدولة وتأكيد' : 'تأكيد الطلب الآن'}
-                      </button>
-                      <button onClick={() => setCurrentStep('selectVehicle')} className="w-full mt-2 py-2 text-sm text-slate-300 hover:text-white">العودة لاختيار المركبة</button>
-                  </div>
-              )}
-            </div>
+                {onlineDrivers.filter(d => !assignedDriver || d.id !== assignedDriver.id).map(driver => (
+                    <InteractiveMap.DriverMarker
+                        key={driver.id}
+                        position={[driver.location!.lat, driver.location!.lng]}
+                        popupContent={`
+                            <strong>${driver.name}</strong><br/>
+                            المركبة: ${VEHICLE_TYPES.find(v => v.id === driver.vehicle.type)?.ar || ''}<br/>
+                            التقييم: ${driver.rating} ★
+                        `}
+                    />
+                ))}
+            </InteractiveMap>
         </div>
+        
+        {pinDropMode && (
+          <>
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 pointer-events-none">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="#EF4444" className="drop-shadow-lg">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z"/>
+                </svg>
+            </div>
+            <div className="absolute bottom-24 inset-x-4 z-20 flex justify-center gap-4">
+                <button
+                    onClick={handleConfirmPinDrop}
+                    className="px-8 py-3 bg-primary text-white font-bold rounded-full shadow-lg hover:bg-primary-dark transform hover:scale-105"
+                >
+                    تأكيد الموقع المحدد
+                </button>
+                 <button
+                    onClick={() => setPinDropMode(null)}
+                    className="px-6 py-3 bg-slate-600 text-white font-bold rounded-full shadow-lg hover:bg-slate-500"
+                >
+                    إلغاء
+                </button>
+            </div>
+          </>
+        )}
       </div>
-      }
+
+      {!currentRide && !pinDropMode && (
+          <div 
+              className={`absolute bottom-0 right-0 left-0 bg-slate-800/95 backdrop-blur-sm shadow-[0_-10px_30px_-15px_rgba(0,0,0,0.3)] z-20 transition-transform duration-300 ease-out rounded-t-2xl
+                  ${isPanelExpanded ? 'translate-y-0' : 'translate-y-[calc(100%-80px)]'}`
+              }
+          >
+              <button 
+                  onClick={() => setIsPanelExpanded(!isPanelExpanded)}
+                  className="w-full py-4 text-center"
+              >
+                  <span className={`inline-block w-10 h-1.5 bg-slate-500 rounded-full transition-transform ${isPanelExpanded ? 'rotate-180' : ''}`}></span>
+              </button>
+
+              <div className="p-4 pt-0">
+                  {currentStep === 'setDestination' && (
+                      <div className="space-y-4 animate-fade-in-up">
+                          <h2 className="text-xl font-bold">إلى أين تريد الذهاب؟</h2>
+                          <div className="relative">
+                              <input 
+                                  type="text" 
+                                  placeholder="نقطة الانطلاق" 
+                                  value={startQuery}
+                                  onChange={(e) => { setStartQuery(e.target.value); setActiveInput('start'); }}
+                                  onFocus={() => setActiveInput('start')}
+                                  disabled={isLocating}
+                                  className="w-full p-3 bg-slate-700 rounded-lg pr-12"
+                              />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-primary">📍</span>
+                              {startSuggestions.length > 0 && activeInput === 'start' && (
+                                  <ul className="absolute bottom-full mb-1 w-full bg-slate-600 rounded-lg z-30 max-h-40 overflow-y-auto">
+                                      {startSuggestions.map(s => <li key={s.name} onClick={() => handleSuggestionSelect(s, 'start')} className="p-3 hover:bg-slate-500 cursor-pointer">{s.name}</li>)}
+                                  </ul>
+                              )}
+                          </div>
+                          <div className="relative">
+                              <input 
+                                  type="text" 
+                                  placeholder="الوجهة"
+                                  value={endQuery}
+                                  onChange={(e) => { setEndQuery(e.target.value); setActiveInput('end'); }}
+                                  onFocus={() => setActiveInput('end')}
+                                  className="w-full p-3 bg-slate-700 rounded-lg pr-12"
+                              />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-red-500">📍</span>
+                              {endSuggestions.length > 0 && activeInput === 'end' && (
+                                  <ul className="absolute bottom-full mb-1 w-full bg-slate-600 rounded-lg z-30 max-h-40 overflow-y-auto">
+                                      {endSuggestions.map(s => <li key={s.name} onClick={() => handleSuggestionSelect(s, 'end')} className="p-3 hover:bg-slate-500 cursor-pointer">{s.name}</li>)}
+                                  </ul>
+                              )}
+                          </div>
+                          <div className="flex gap-2 text-center text-sm">
+                            <button onClick={() => { setPinDropMode('start'); setIsPanelExpanded(false); }} className="flex-1 py-2 bg-slate-700/80 rounded-lg hover:bg-slate-600">حدد الانطلاق على الخريطة</button>
+                            <button onClick={() => { setPinDropMode('end'); setIsPanelExpanded(false); }} className="flex-1 py-2 bg-slate-700/80 rounded-lg hover:bg-slate-600">حدد الوجهة على الخريطة</button>
+                          </div>
+
+                          {isLoadingRoute && <p className="text-center text-primary animate-pulse">جاري حساب المسار...</p>}
+                          {routeError && <p className="text-center text-red-400 p-2 bg-red-900/50 rounded-lg">{routeError}</p>}
+                      </div>
+                  )}
+
+                  {currentStep === 'selectVehicle' && routeInfo && (
+                      <div className="animate-fade-in-up">
+                          <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold">اختر نوع المركبة</h2>
+                            <button onClick={() => setCurrentStep('setDestination')} className="text-sm text-slate-400 hover:text-white">تعديل</button>
+                          </div>
+                          <p className="text-center mb-4 bg-slate-700/50 p-2 rounded-lg">المسافة: {routeInfo.distance.toFixed(1)} كم | الزمن التقريبي: {Math.round(routeInfo.duration)} دقيقة</p>
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                              {VEHICLE_TYPES.map(vt => {
+                                  const fare = getEstimatedFare(vt.id, routeInfo.distance, routeInfo.duration);
+                                  return (
+                                      <button key={vt.id} onClick={() => handleVehicleSelect(vt.id)} className="p-3 bg-slate-700 rounded-lg hover:bg-slate-600/80 hover:border-primary border-2 border-transparent">
+                                          <div className="text-4xl">{vt.icon}</div>
+                                          <div className="font-semibold">{vt.ar}</div>
+                                          <div className="text-xs text-slate-300">{fare.toLocaleString('ar-SY')} ل.س</div>
+                                      </button>
+                                  )
+                              })}
+                          </div>
+                      </div>
+                  )}
+
+                  {currentStep === 'confirmRequest' && selectedVehicle && routeInfo && (
+                      <div className="animate-fade-in-up">
+                          <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold">تأكيد الطلب</h2>
+                            <button onClick={() => setCurrentStep('selectVehicle')} className="text-sm text-slate-400 hover:text-white">رجوع</button>
+                          </div>
+                          <div className="bg-slate-700/50 p-4 rounded-lg text-center space-y-2">
+                              <p>من: {startLocation?.name}</p>
+                              <p>إلى: {endLocation?.name}</p>
+                              <p>المركبة: {VEHICLE_TYPES.find(v => v.id === selectedVehicle)?.ar}</p>
+                              <p className="font-bold text-lg">الأجرة التقديرية: {getEstimatedFare(selectedVehicle, routeInfo.distance, routeInfo.duration).toLocaleString('ar-SY')} ل.س</p>
+                          </div>
+                           <div className="mt-4 flex items-center justify-center gap-4">
+                               <label className="flex items-center space-x-2 rtl:space-x-reverse cursor-pointer">
+                                   <input type="checkbox" checked={isScheduling} onChange={(e) => setIsScheduling(e.target.checked)} className="form-checkbox h-5 w-5 bg-slate-600 border-slate-500 text-primary focus:ring-primary"/>
+                                   <span>جدولة الرحلة</span>
+                               </label>
+                               {isScheduling && (
+                                   <input 
+                                       type="datetime-local" 
+                                       value={scheduledTime}
+                                       onChange={e => setScheduledTime(e.target.value)}
+                                       className="p-2 bg-slate-700 rounded border border-slate-600 text-white"
+                                       style={{ colorScheme: 'dark' }}
+                                   />
+                               )}
+                           </div>
+                          <button 
+                              onClick={handleRequestRide} 
+                              className="w-full mt-4 py-4 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark"
+                              disabled={isScheduling && !scheduledTime}
+                          >
+                            {isScheduling ? 'تأكيد الجدولة' : 'اطلب الآن'}
+                          </button>
+                      </div>
+                  )}
+              </div>
+          </div>
+      )}
+
+      {currentRide && !canNavigate && (
+          <div className="absolute bottom-4 right-4 z-20">
+              <button onClick={() => cancelRide(currentRide.id)} className="px-6 py-3 bg-red-600 text-white font-bold rounded-full shadow-lg hover:bg-red-700">إلغاء الرحلة</button>
+          </div>
+      )}
     </div>
   );
 };
