@@ -326,6 +326,9 @@ const LoginPage: React.FC = () => {
             <p>سائق: 0987654321 (كلمة المرور: 123)</p>
             <p>مدير: 0999999999 (كلمة المرور: admin123)</p>
         </div>
+        <div className="text-center pt-2">
+            <p className="text-[10px] text-slate-600 font-mono">الإصدار: 26-11-2025</p>
+        </div>
       </div>
     </div>
   );
