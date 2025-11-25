@@ -8,8 +8,44 @@ export const setMapApiKey = (newKey: string) => {
     }
 };
 
-// Use absolute URLs for direct API calls, as ORS supports CORS.
-const DIRECTIONS_API_URL = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
+/**
+ * Decodes a polyline string into an array of lat/lng pairs.
+ * @param encoded - The encoded polyline string.
+ * @returns An array of coordinates `[latitude, longitude]`.
+ */
+const decodePolyline = (encoded: string): [number, number][] => {
+    const points: [number, number][] = [];
+    let index = 0, len = encoded.length;
+    let lat = 0, lng = 0;
+
+    while (index < len) {
+        let b, shift = 0, result = 0;
+        do {
+            b = encoded.charCodeAt(index++) - 63;
+            result |= (b & 0x1f) << shift;
+            shift += 5;
+        } while (b >= 0x20);
+        const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+        lat += dlat;
+
+        shift = 0;
+        result = 0;
+        do {
+            b = encoded.charCodeAt(index++) - 63;
+            result |= (b & 0x1f) << shift;
+            shift += 5;
+        } while (b >= 0x20);
+        const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+        lng += dlng;
+
+        points.push([lat / 1e5, lng / 1e5]);
+    }
+    return points;
+};
+
+
+// Use standard directions endpoint, which works better with GET requests.
+const DIRECTIONS_API_URL = 'https://api.openrouteservice.org/v2/directions/driving-car';
 const GEOCODE_API_URL = 'https://api.openrouteservice.org/geocode/search';
 
 
@@ -84,17 +120,19 @@ export const getRoute = async (
     return Promise.reject(new Error(errorMsg));
   }
 
-  const coordinates = [[start.lng, start.lat], [end.lng, end.lat]];
+  const params = new URLSearchParams({
+    api_key: apiKey,
+    start: `${start.lng},${start.lat}`,
+    end: `${end.lng},${end.lat}`,
+  });
+  const url = `${DIRECTIONS_API_URL}?${params.toString()}`;
 
   try {
-    const response = await fetch(DIRECTIONS_API_URL, {
-      method: 'POST',
+    const response = await fetch(url, {
+      method: 'GET',
       headers: {
         'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8',
-        'Content-Type': 'application/json',
-        'Authorization': apiKey,
       },
-      body: JSON.stringify({ coordinates }),
     });
 
     if (!response.ok) {
@@ -133,15 +171,8 @@ export const getRoute = async (
         throw new Error(userMessage);
     }
 
-    // Step 2: Extract the main route feature from the GeoJSON FeatureCollection.
-    const routeFeature = data?.features?.[0];
-
-    // Create a consistent 'route' object for validation, mimicking the old structure.
-    const route = routeFeature ? {
-        summary: routeFeature.properties?.summary,
-        geometry: routeFeature.geometry,
-    } : undefined;
-
+    // Step 2: Extract the main route from the standard JSON response.
+    const route = data?.routes?.[0];
 
     // Step 3: Check if no route was found.
     if (!route) {
@@ -151,29 +182,19 @@ export const getRoute = async (
             throw new Error(`تعذر العثور على مسار. ملاحظة من خدمة الخرائط: ${warningMessage}`);
         }
         
-        console.error("No route feature found in ORS GeoJSON response:", data);
+        console.error("No route object found in ORS response:", data);
         throw new Error("تعذر إنشاء مسار صالح بين النقطتين. قد تكون إحدى النقاط غير قابلة للوصول أو خارج منطقة الخدمة.");
     }
     
-    // Step 4: Validate the route's geometry, which is essential for display.
+    // Step 4: Validate and decode the route's geometry.
     const geometry = route.geometry;
     
-    if (!geometry || !geometry.type || !Array.isArray(geometry.coordinates)) {
-        console.error("Invalid or incomplete geometry object in ORS route:", route);
+    if (!geometry || typeof geometry !== 'string') {
+        console.error("Invalid or incomplete geometry string in ORS route:", route);
         throw new Error("تم استلام بيانات مسار غير مكتملة من خدمة الخرائط.");
     }
 
-    // Explicitly handle non-LineString geometries which can occur for unroutable points.
-    if (geometry.type !== 'LineString') {
-        console.error(`Received unexpected geometry type: '${geometry.type}'. Full route object:`, route);
-        throw new Error(`تعذر إنشاء المسار. النوع الهندسي المستلم '${geometry.type}' غير مدعوم.`);
-    }
-
-    const rawCoords = geometry.coordinates;
-
-    const polyline: [number, number][] = rawCoords
-      .filter((coord: any) => Array.isArray(coord) && coord.length === 2 && typeof coord[0] === 'number' && typeof coord[1] === 'number')
-      .map((coord: [number, number]) => [coord[1], coord[0]]);
+    const polyline = decodePolyline(geometry);
 
     if (polyline.length < 2) {
       if (haversineDistance < VERY_CLOSE_DISTANCE_KM) {
@@ -182,9 +203,10 @@ export const getRoute = async (
           distance: 0,
           duration: 0,
           polyline: [[start.lat, start.lng], [end.lat, end.lng]],
+          steps: [],
         };
       }
-      console.error("Could not form a valid polyline from LineString geometry (less than 2 valid points). This can happen for unroutable points.", { original: rawCoords, filtered: polyline });
+      console.error("Could not form a valid polyline from geometry (less than 2 valid points).", { original: geometry, decoded: polyline });
       throw new Error("لا يمكن إنشاء خط مسار صالح من البيانات المستلمة. قد تكون نقاط المسار غير صالحة.");
     }
 
@@ -199,7 +221,7 @@ export const getRoute = async (
         throw new Error("تم استلام بيانات مسافة وزمن غير صالحة من خدمة الخرائط.");
     }
     
-    const steps: Step[] = routeFeature?.properties?.segments?.[0]?.steps?.map((step: any) => ({
+    const steps: Step[] = route?.segments?.[0]?.steps?.map((step: any) => ({
       distance: step.distance,
       duration: step.duration,
       type: step.type,
@@ -207,7 +229,6 @@ export const getRoute = async (
       name: step.name,
       way_points: step.way_points,
     })) || [];
-
 
     // Step 6: If all checks pass, format and return the data.
     return {
@@ -219,6 +240,9 @@ export const getRoute = async (
 
   } catch (error) {
     console.error("A critical error occurred in getRoute:", error);
+    if (error instanceof TypeError && error.message.toLowerCase().includes('failed to fetch')) {
+        throw new Error("فشل الاتصال بخدمة الخرائط. يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى.");
+    }
     if (error instanceof Error) {
         // Re-throw the specific error to be handled by the UI
         throw error;
@@ -232,6 +256,7 @@ export const searchLocations = async (query: string, focusPoint?: { lat: number,
     if (!query || query.length < 3) return [];
     
     const params = new URLSearchParams({
+        api_key: apiKey,
         text: query,
         lang: 'ar',
     });
@@ -247,7 +272,6 @@ export const searchLocations = async (query: string, focusPoint?: { lat: number,
         const response = await fetch(url, {
             headers: {
                 'Accept': 'application/json',
-                'Authorization': apiKey,
             }
         });
         if (!response.ok) {
@@ -269,6 +293,9 @@ export const searchLocations = async (query: string, focusPoint?: { lat: number,
         return [];
     } catch (error) {
         console.error("Error searching locations:", error);
+        if (error instanceof TypeError && error.message.toLowerCase().includes('failed to fetch')) {
+            console.error("Failed to fetch location suggestions due to network error.");
+        }
         return [];
     }
 };

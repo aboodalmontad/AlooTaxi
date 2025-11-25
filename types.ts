@@ -40,10 +40,17 @@ export enum SyrianProvinces {
   AL_HASAKAH = 'Al-Hasakah',
 }
 
+export enum DriverStatus {
+    PENDING = 'PENDING',
+    APPROVED = 'APPROVED',
+    REJECTED = 'REJECTED',
+}
+
 export interface User {
   id: string;
   phone: string;
   name: string;
+  password?: string;
   role: UserRole;
   province?: SyrianProvinces;
 }
@@ -57,6 +64,16 @@ export interface Driver extends User {
   rating: number;
   isOnline: boolean;
   location?: { lat: number; lng: number; heading: number | null };
+  status: DriverStatus;
+  isBlocked?: boolean;
+  isVerified?: boolean;
+  verificationCode?: string;
+  performance?: {
+      totalRides: number;
+      averageRating: number;
+      totalEarnings: number;
+      weeklyRides: number[];
+  };
 }
 
 export interface Customer extends User {}

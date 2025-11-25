@@ -43,8 +43,6 @@ const DriverPage: React.FC = () => {
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('locked');
   const routeCalculationTimeoutRef = useRef<number | null>(null);
   const notifiedRideIdRef = useRef<string | null>(null);
-  const locationWatchIdRef = useRef<number | null>(null);
-  const latestPositionRef = useRef<GeolocationPosition | null>(null);
   
   const driver = user as Driver;
 
@@ -54,127 +52,6 @@ const DriverPage: React.FC = () => {
       updateDriverOnlineStatus(driver.id, isOnline);
     }
   }, [isOnline, driver, updateDriverOnlineStatus]);
-  
-  const locateDriver = useCallback((isManualRequest: boolean) => {
-    if (isManualRequest) {
-        setIsManualLocating(true);
-    }
-    setDriverLocation(null);
-    setLocationError(null);
-    setLocationWarning(null);
-    latestPositionRef.current = null; // Reset for new attempt
-
-    const province = driver?.province || SyrianProvinces.DAMASCUS;
-    const provinceCoords = PROVINCE_COORDS[province] || DAMASCUS_COORDS;
-    const fallbackLocation = { lat: provinceCoords[0], lng: provinceCoords[1], heading: null };
-    
-    const clearWatch = () => {
-        if (locationWatchIdRef.current !== null) {
-            navigator.geolocation.clearWatch(locationWatchIdRef.current);
-            locationWatchIdRef.current = null;
-        }
-    };
-    clearWatch();
-
-    if (!navigator.geolocation) {
-        setDriverLocation(fallbackLocation);
-        if (driver) updateDriverLocation(driver.id, fallbackLocation);
-        setLocationError("خدمات الموقع غير مدعومة. لا يمكنك العمل كسائق.");
-        if (isManualRequest) setIsManualLocating(false);
-        setIsOnline(false);
-        return;
-    }
-    
-    const locationTimeout = setTimeout(() => {
-        clearWatch();
-        const lastPosition = latestPositionRef.current;
-
-        if (lastPosition) {
-            const { latitude, longitude, heading, accuracy } = lastPosition.coords;
-            const newLocation = { lat: latitude, lng: longitude, heading };
-            setLocationWarning(`تم استخدام موقع تقريبي بدقة (${Math.round(accuracy)} متر). حاول الانتقال لمكان مفتوح.`);
-            setDriverLocation(newLocation);
-            if (driver) updateDriverLocation(driver.id, newLocation);
-            setLocationError(null);
-        } else {
-            setLocationError("انتهت مهلة تحديد الموقع. قد تكون إشارة GPS ضعيفة أو أن خدمات الموقع معطلة في جهازك. سيتم استخدام موقع افتراضي.");
-            setDriverLocation(fallbackLocation);
-            if (driver) updateDriverLocation(driver.id, fallbackLocation);
-        }
-        if (isManualRequest) setIsManualLocating(false);
-    }, 25000);
-
-    const successCallback = (position: GeolocationPosition) => {
-        latestPositionRef.current = position;
-        const { latitude, longitude, heading, accuracy } = position.coords;
-        
-        if (accuracy > 100) {
-            setLocationWarning(`دقة الموقع منخفضة (${Math.round(accuracy)} متر). ننتظر إشارة أفضل...`);
-            return; // Keep watching
-        }
-        
-        clearTimeout(locationTimeout);
-        clearWatch();
-
-        const newLocation = { lat: latitude, lng: longitude, heading };
-        
-        setLocationWarning(null);
-        setDriverLocation(newLocation);
-        if (driver) updateDriverLocation(driver.id, newLocation);
-        setLocationError(null);
-        if (isManualRequest) setIsManualLocating(false);
-    };
-    
-    const errorCallback = (error: GeolocationPositionError) => {
-        if (error.code === error.PERMISSION_DENIED) {
-            clearTimeout(locationTimeout);
-            clearWatch();
-            setLocationError("تم رفض إذن الوصول إلى الموقع. يجب تفعيله للعمل كسائق. سيتم استخدام موقع افتراضي.");
-            setDriverLocation(fallbackLocation);
-            if (driver) updateDriverLocation(driver.id, fallbackLocation);
-            if (isManualRequest) setIsManualLocating(false);
-            setIsOnline(false);
-        }
-    };
-
-    locationWatchIdRef.current = navigator.geolocation.watchPosition(
-        successCallback,
-        errorCallback,
-        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-    );
-  }, [driver, updateDriverLocation]);
-  
-  // Cleanup effect for the location watch
-  useEffect(() => {
-    return () => {
-      if (locationWatchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(locationWatchIdRef.current);
-      }
-    };
-  }, []);
-
-  // Effect for initial location fetch
-  useEffect(() => {
-    if (isOnline && !driverLocation && !isManualLocating) {
-        locateDriver(false);
-    }
-  }, [isOnline, driverLocation, locateDriver, isManualLocating]);
-
-  // Effect to handle stale location from VPNs by re-fetching on tab focus
-  useEffect(() => {
-      const handleVisibilityChange = () => {
-          if (document.visibilityState === 'visible' && isOnline) {
-              locateDriver(false);
-          }
-      };
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isOnline, locateDriver]);
-  
-  const handleManualLocate = () => {
-    locateDriver(true);
-    setMapViewMode('locked');
-  };
 
   const handleLocationUpdate = useCallback((position: GeolocationPosition) => {
       const { latitude, longitude, heading } = position.coords;
@@ -209,6 +86,31 @@ const DriverPage: React.FC = () => {
     onSuccess: handleLocationUpdate,
     onError: handleLocationError,
   });
+  
+  const handleManualLocate = () => {
+    setIsManualLocating(true);
+    setLocationError(null);
+    setLocationWarning(null);
+    setMapViewMode('locked');
+
+    if (!navigator.geolocation) {
+        setLocationError("خدمات الموقع الجغرافي غير مدعومة في متصفحك.");
+        setIsManualLocating(false);
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            handleLocationUpdate(position);
+            setIsManualLocating(false);
+        },
+        (error) => {
+            handleLocationError(error);
+            setIsManualLocating(false);
+        },
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    );
+  };
 
   useEffect(() => {
     if (viewingRideRequest && driverLocation && isOnline) {
@@ -527,7 +429,9 @@ const DriverPage: React.FC = () => {
             <button onClick={() => setMapViewMode(mapViewMode === 'navigation' ? 'locked' : 'navigation')} disabled={typeof driverLocation?.heading !== 'number'} className={`w-12 h-12 rounded-full flex items-center justify-center text-3xl ${mapViewMode === 'navigation' ? 'bg-primary' : 'bg-slate-800/80 hover:bg-slate-700'} disabled:opacity-50`} title="وضع الملاحة">🧭</button>
           </div>
           {driverLocation ? (
-            <InteractiveMap center={driverLocation ? [driverLocation.lat, driverLocation.lng] : provinceCenter} userLocation={driverLocation} userLocationAs="driver" startLocation={currentRide?.startLocation} endLocation={currentRide?.endLocation} routes={routeLegsForMap} disableAutoPanZoom={mapViewMode !== 'locked' || canNavigate} onUserInteraction={() => setMapViewMode('free')} navigationMode={{ enabled: canNavigate, bearing: driverLocation?.heading ?? 0 }} />
+            <div className={`absolute inset-0 transition-transform duration-500 ease-in-out ${canNavigate ? 'navigation-view' : ''}`}>
+               <InteractiveMap center={driverLocation ? [driverLocation.lat, driverLocation.lng] : provinceCenter} userLocation={driverLocation} userLocationAs="driver" startLocation={currentRide?.startLocation} endLocation={currentRide?.endLocation} routes={routeLegsForMap} disableAutoPanZoom={mapViewMode !== 'locked' || canNavigate} onUserInteraction={() => setMapViewMode('free')} navigationMode={{ enabled: canNavigate, bearing: driverLocation?.heading ?? 0 }} />
+            </div>
           ) : (<div className="h-full w-full flex items-center justify-center bg-slate-900"><p className="text-lg animate-pulse">جاري تحديد موقعك...</p></div>)}
       </div>
     </div>

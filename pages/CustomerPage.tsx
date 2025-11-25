@@ -158,14 +158,27 @@ const CustomerPage: React.FC = () => {
     };
 
     const errorCallback = (error: GeolocationPositionError) => {
-        if (error.code === error.PERMISSION_DENIED) {
-            clearTimeout(locationTimeout);
-            clearWatch();
-            setLocationError("تم رفض إذن الوصول إلى الموقع. يرجى تفعيله من إعدادات المتصفح. سيتم استخدام موقع افتراضي.");
-            setStartLocation(fallbackLocation);
-            setStartQuery(fallbackLocation.name);
-            setIsLocating(false);
+        clearTimeout(locationTimeout);
+        clearWatch();
+
+        let errorMessage = "انتهت مهلة تحديد الموقع. قد تكون إشارة GPS ضعيفة أو أن خدمات الموقع معطلة في جهازك. سيتم استخدام موقع افتراضي.";
+
+        switch (error.code) {
+            case error.PERMISSION_DENIED:
+                errorMessage = "تم رفض إذن الوصول إلى الموقع. يرجى تفعيله من إعدادات المتصفح. سيتم استخدام موقع افتراضي.";
+                break;
+            case error.POSITION_UNAVAILABLE:
+                errorMessage = "تعذر تحديد موقعك الحالي، قد تكون إشارة الشبكة أو GPS ضعيفة. سيتم استخدام موقع افتراضي.";
+                break;
+            case error.TIMEOUT:
+                // Keep the default timeout message
+                break;
         }
+
+        setLocationError(errorMessage);
+        setStartLocation(fallbackLocation);
+        setStartQuery(fallbackLocation.name);
+        setIsLocating(false);
     };
 
     locationWatchIdRef.current = navigator.geolocation.watchPosition(

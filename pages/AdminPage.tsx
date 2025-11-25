@@ -1,15 +1,15 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../contexts/RideContext';
-// FIX: Import UserRole to use in mock data.
-import { PricingSettings, VehicleType, DriverPayment, Ride, RideStatus, Driver, UserRole } from '../types';
+import { PricingSettings, VehicleType, DriverPayment, Ride, RideStatus, Driver, UserRole, DriverStatus } from '../types';
 import { DAMASCUS_COORDS, VEHICLE_TYPES } from '../constants';
 import { useApi } from '../App';
 import InteractiveMap, { RouteStyle } from '../components/InteractiveMap';
+import { mockUsers } from '../contexts/AuthContext';
 
 const AdminPage: React.FC = () => {
     const { user, logout } = useAuth();
-    const [activeTab, setActiveTab] = useState('liveMap');
+    const [activeTab, setActiveTab] = useState('drivers');
 
     const renderContent = () => {
         switch (activeTab) {
@@ -174,27 +174,11 @@ const ReportsManagement: React.FC = () => {
     );
 };
 
-// --- Driver Data Structures ---
-interface DriverData extends Driver {
-    isBlocked: boolean;
-    performance: {
-        totalRides: number;
-        averageRating: number;
-        totalEarnings: number;
-        weeklyRides: number[]; // [Sat, Sun, Mon, Tue, Wed, Thu, Fri]
-    };
-}
-
-const initialDrivers: DriverData[] = [
-    // FIX: Use UserRole enum instead of string literal for type safety.
-    { id: 'driv1', name: 'سامر السائق', phone: '0987654321', role: UserRole.DRIVER, vehicle: {type: VehicleType.AC_CAR, model: 'Kia Rio', plateNumber: '123'}, rating: 4.8, isOnline: true, isBlocked: false, location: { lat: 33.515, lng: 36.278, heading: null }, performance: { totalRides: 152, averageRating: 4.8, totalEarnings: 1850000, weeklyRides: [15, 14, 8, 10, 12, 18, 5] } },
-    // FIX: Use UserRole enum instead of string literal for type safety.
-    { id: 'driv2', name: 'خالد المصري', phone: '0988888888', role: UserRole.DRIVER, vehicle: {type: VehicleType.VIP, model: 'Mercedes', plateNumber: '456'}, rating: 4.9, isOnline: true, isBlocked: false, location: { lat: 33.500, lng: 36.300, heading: null }, performance: { totalRides: 45, averageRating: 4.9, totalEarnings: 2500000, weeklyRides: [2, 3, 1, 4, 3, 5, 4] } },
-];
-
 // --- Driver Performance Modal ---
-const DriverPerformanceModal: React.FC<{ driver: DriverData; onClose: () => void; }> = ({ driver, onClose }) => {
-    const { performance } = driver;
+const DriverPerformanceModal: React.FC<{ driver: Driver; onClose: () => void; }> = ({ driver, onClose }) => {
+    const performance = driver.performance;
+    if (!performance) return null;
+
     const maxWeeklyRides = Math.max(...performance.weeklyRides, 1);
     const weekDays = ['س', 'أ', 'ن', 'ث', 'ر', 'خ', 'ج'];
 
@@ -242,44 +226,107 @@ const DriverPerformanceModal: React.FC<{ driver: DriverData; onClose: () => void
     );
 };
 
+const VerificationCodeModal: React.FC<{ details: { driver: Driver, code: string }; onClose: () => void; }> = ({ details, onClose }) => {
+    const { driver, code } = details;
+    const whatsappMessage = `رمز تفعيل حسابك في ألو تكسي هو: ${code}`;
+    const whatsappLink = `https://wa.me/963${driver.phone.substring(1)}?text=${encodeURIComponent(whatsappMessage)}`;
+
+    return (        
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+            <div className="bg-slate-800 rounded-lg shadow-2xl p-6 w-full max-w-md mx-4 text-center" onClick={e => e.stopPropagation()}>
+                <h3 className="text-2xl font-bold text-primary mb-4">تمت الموافقة على السائق!</h3>
+                <p className="mb-2">يرجى إرسال رمز التفعيل التالي إلى السائق <span className="font-bold">{driver.name}</span> على الرقم <span className="font-mono">{driver.phone}</span>.</p>
+                <div className="my-6 p-4 bg-slate-900 border-2 border-dashed border-primary rounded-lg">
+                    <p className="text-4xl font-mono tracking-widest text-teal-300">{code}</p>
+                </div>
+                <a 
+                    href={whatsappLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block w-full py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 mb-3"
+                >
+                    إرسال عبر واتساب
+                </a>
+                <button onClick={onClose} className="w-full py-2 bg-slate-600 text-white rounded hover:bg-slate-500">
+                    إغلاق
+                </button>
+            </div>
+        </div>
+    );
+};
+
 
 const DriverManagement: React.FC = () => {
-    const mockNewDrivers = [
-        { id: 'driv3', name: 'أحمد جديد', status: 'Pending', date: '2024-05-20' },
-        { id: 'driv4', name: 'فاطمة خالد', status: 'Pending', date: '2024-05-19' },
-    ];
-    
-    const [drivers, setDrivers] = useState(initialDrivers);
-    const [viewingDriver, setViewingDriver] = useState<DriverData | null>(null);
+    const [users, setUsers] = useState(mockUsers);
+    const [viewingDriver, setViewingDriver] = useState<Driver | null>(null);
+    const [codeForDriver, setCodeForDriver] = useState<{ driver: Driver, code: string } | null>(null);
 
 
-    const toggleBlock = (driverId: string) => {
-        setDrivers(drivers.map(d =>
-            d.id === driverId ? { ...d, isBlocked: !d.isBlocked } : d
-        ));
+    // Force re-render if mockUsers changes from another component
+    useEffect(() => {
+        setUsers(mockUsers);
+    }, []);
+
+    const updateDriver = (phone: string, updates: Partial<Driver>) => {
+        const updatedUsers = { ...users };
+        const driverToUpdate = updatedUsers[phone] as Driver;
+        if (driverToUpdate && driverToUpdate.role === UserRole.DRIVER) {
+            updatedUsers[phone] = { ...driverToUpdate, ...updates };
+            // Persist change to the global mock object
+            Object.assign(mockUsers[phone], updates);
+            setUsers(updatedUsers);
+        }
     };
+
+    const handleApproval = (phone: string, newStatus: DriverStatus) => {
+        const driver = users[phone] as Driver;
+        if (newStatus === DriverStatus.APPROVED && driver.status !== DriverStatus.APPROVED) {
+            const code = Math.floor(100000 + Math.random() * 900000).toString();
+            const updates = { status: newStatus, verificationCode: code, isVerified: false };
+            updateDriver(phone, updates);
+            const updatedDriverForModal = { ...driver, ...updates };
+            setCodeForDriver({ driver: updatedDriverForModal, code });
+        } else {
+            updateDriver(phone, { status: newStatus });
+        }
+    };
+
+
+    const toggleBlock = (phone: string) => {
+        const driver = users[phone] as Driver;
+        updateDriver(phone, { isBlocked: !driver.isBlocked });
+    };
+
+    // FIX: Use a type predicate to correctly filter drivers from the 'users' object.
+    const allDrivers = Object.values(users).filter((u: any): u is Driver => u?.role === UserRole.DRIVER);
+    const pendingDrivers = allDrivers.filter(d => d.status === DriverStatus.PENDING);
+    const managedDrivers = allDrivers.filter(d => d.status === DriverStatus.APPROVED || d.status === DriverStatus.REJECTED);
 
     return (
         <div>
-            <h2 className="text-2xl font-bold mb-6">مراجعة طلبات السائقين الجدد</h2>
-            <div className="bg-slate-800 p-4 rounded-lg">
-                <div className="divide-y divide-slate-700">
-                    {mockNewDrivers.map(driver => (
-                        <div key={driver.id} className="flex items-center justify-between p-3">
-                            <div>
-                                <p className="font-semibold">{driver.name}</p>
-                                <p className="text-sm text-slate-400">تاريخ الطلب: {driver.date}</p>
-                            </div>
-                            <div className="space-x-2 rtl:space-x-reverse">
-                                <button className="px-3 py-1 bg-green-600 rounded">موافقة</button>
-                                <button className="px-3 py-1 bg-red-600 rounded">رفض</button>
-                            </div>
+            {pendingDrivers.length > 0 && (
+                <>
+                    <h2 className="text-2xl font-bold mb-6">طلبات السائقين الجدد قيد المراجعة</h2>
+                    <div className="bg-slate-800 p-4 rounded-lg mb-10 shadow-lg">
+                        <div className="divide-y divide-slate-700">
+                            {pendingDrivers.map(driver => (
+                                <div key={driver.id} className="flex items-center justify-between p-3">
+                                    <div>
+                                        <p className="font-semibold text-lg">{driver.name}</p>
+                                        <p className="text-sm text-slate-400">{driver.phone} - {driver.vehicle.model} ({driver.vehicle.plateNumber})</p>
+                                    </div>
+                                    <div className="space-x-2 rtl:space-x-reverse">
+                                        <button onClick={() => handleApproval(driver.phone, DriverStatus.APPROVED)} className="px-4 py-2 bg-green-600 rounded hover:bg-green-700 font-semibold">موافقة</button>
+                                        <button onClick={() => handleApproval(driver.phone, DriverStatus.REJECTED)} className="px-4 py-2 bg-red-600 rounded hover:bg-red-700 font-semibold">رفض</button>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
-                    ))}
-                </div>
-            </div>
+                    </div>
+                </>
+            )}
 
-            <h2 className="text-2xl font-bold mt-10 mb-6">قائمة السائقين الحاليين</h2>
+            <h2 className="text-2xl font-bold mt-10 mb-6">قائمة السائقين</h2>
             <div className="bg-slate-800 rounded-lg overflow-x-auto shadow-lg">
                 <table className="w-full text-right min-w-max">
                     <thead className="bg-slate-700/50">
@@ -292,26 +339,37 @@ const DriverManagement: React.FC = () => {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-700">
-                        {drivers.map(driver => (
-                            <tr key={driver.id} className={`hover:bg-slate-700/50 transition-colors duration-200 ${driver.isBlocked ? 'opacity-50 bg-slate-900/50' : ''}`}>
+                        {managedDrivers.map(driver => (
+                            <tr key={driver.id} className={`hover:bg-slate-700/50 transition-colors duration-200 
+                                ${driver.isBlocked ? 'opacity-50 bg-slate-900/50' : ''}
+                                ${driver.status === DriverStatus.REJECTED ? 'bg-red-900/20' : ''}
+                            `}>
                                 <td className="p-4">{driver.name}</td>
                                 <td className="p-4" dir="ltr">{driver.phone}</td>
                                 <td className="p-4">{VEHICLE_TYPES.find(v => v.id === driver.vehicle.type)?.ar || 'غير محدد'}</td>
                                 <td className="p-4">
                                     <div className="flex items-center">
-                                        <span className={`h-3 w-3 rounded-full mr-2 ${driver.isOnline ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`}></span>
-                                        <span>{driver.isOnline ? 'متصل' : 'غير متصل'}</span>
+                                         {driver.status === DriverStatus.APPROVED ? (
+                                             <>
+                                                <span className={`h-3 w-3 rounded-full mr-2 ${driver.isOnline ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`}></span>
+                                                <span>{driver.isOnline ? 'متصل' : 'غير متصل'}</span>
+                                                {!driver.isVerified && <span className="text-xs bg-yellow-600 text-white px-2 py-0.5 rounded-full mr-2">لم يتم التفعيل</span>}
+                                             </>
+                                         ) : (
+                                             <span className="text-red-400 font-semibold">مرفوض</span>
+                                         )}
                                     </div>
                                 </td>
                                 <td className="p-4 space-x-2 rtl:space-x-reverse whitespace-nowrap">
-                                    <button className="px-3 py-1 bg-primary/70 text-sm rounded hover:bg-primary">عرض التفاصيل</button>
                                     <button 
                                         onClick={() => setViewingDriver(driver)}
-                                        className="px-3 py-1 bg-blue-600 text-sm rounded hover:bg-blue-700">
+                                        className="px-3 py-1 bg-blue-600 text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+                                        disabled={!driver.performance}
+                                    >
                                         عرض الأداء
                                     </button>
                                     <button 
-                                        onClick={() => toggleBlock(driver.id)}
+                                        onClick={() => toggleBlock(driver.phone)}
                                         className={`px-3 py-1 text-sm rounded ${driver.isBlocked ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'}`}
                                     >
                                         {driver.isBlocked ? 'رفع الحظر' : 'حظر'}
@@ -323,6 +381,7 @@ const DriverManagement: React.FC = () => {
                 </table>
             </div>
             {viewingDriver && <DriverPerformanceModal driver={viewingDriver} onClose={() => setViewingDriver(null)} />}
+            {codeForDriver && <VerificationCodeModal details={codeForDriver} onClose={() => setCodeForDriver(null)} />}
         </div>
     );
 };
@@ -347,6 +406,9 @@ const DriverAccounting: React.FC = () => {
     const [endDate, setEndDate] = useState('');
     const [payments, setPayments] = useState(mockDriverPayments);
     const [isPaymentModalOpen, setPaymentModalOpen] = useState(false);
+    
+    const driversFromDb = Object.values(mockUsers).filter(u => u.role === UserRole.DRIVER) as Driver[];
+
 
     const report = useMemo(() => {
         if (!selectedDriverId || !startDate || !endDate) return null;
@@ -394,7 +456,7 @@ const DriverAccounting: React.FC = () => {
 
             {isPaymentModalOpen && selectedDriverId && (
                 <AddPaymentModal 
-                    driverName={initialDrivers.find(d => d.id === selectedDriverId)?.name || ''}
+                    driverName={driversFromDb.find(d => d.id === selectedDriverId)?.name || ''}
                     onClose={() => setPaymentModalOpen(false)}
                     onAddPayment={handleAddPayment}
                 />
@@ -405,7 +467,7 @@ const DriverAccounting: React.FC = () => {
                     <label htmlFor="driverSelect" className="text-sm">اختر السائق:</label>
                     <select id="driverSelect" value={selectedDriverId || ''} onChange={e => setSelectedDriverId(e.target.value)} className="w-full p-2 bg-slate-700 rounded border border-slate-600 text-white mt-1">
                         <option value="">-- اختر سائق --</option>
-                        {initialDrivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        {driversFromDb.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
                 </div>
                 <div className="flex items-center gap-2">
